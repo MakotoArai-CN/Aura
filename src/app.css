@@ -1,0 +1,483 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ═══════════════════════════════════════════════════
+   Motion tokens — shared easing / duration curves
+   ═══════════════════════════════════════════════════ */
+:root {
+  --ease-out-quart:    cubic-bezier(0.25, 1, 0.5, 1);
+  --ease-out-expo:     cubic-bezier(0.19, 1, 0.22, 1);
+  --ease-in-out-quart: cubic-bezier(0.76, 0, 0.24, 1);
+  --ease-spring:       cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-soft:         cubic-bezier(0.4, 0, 0.2, 1);
+
+  --dur-instant: 90ms;
+  --dur-fast:    150ms;
+  --dur-med:     260ms;
+  --dur-slow:    420ms;
+  --dur-xslow:   640ms;
+}
+
+/* Modern black theme, aligned with original origin2/common2 */
+:root,
+[data-theme="dark"] {
+  --theme-color:       #017afe;
+  --theme-color-ope:   rgba(1, 122, 254, 0.4);
+  --theme-color-hover: #bbcdff;
+  --theme-color-glow:  rgba(1, 122, 254, 0.4);
+  --important-color:   #017afe;
+  --icon-default-color:#666666;
+
+  --color-body-bg:         #222222;
+  --sidebar-background:    #1D1D1F;
+  --sidebar-button-bg:     #323232;
+  --sidebar-button-background: #323232;
+  --nav-background-color:  rgba(34, 34, 34, 0.86);
+  --content-background-color: #222222;
+  --foot-background-color: #222222;
+  --windows-border-color:  #222222;
+
+  --text-default-color:    #ffffff;
+  --text-subtitle-color:   #7a7a7b;
+  --text-disable-color:    #b7b7b7;
+
+  --lyric-default-color:   #666666;
+  --lyric-highlight-color: #ffffff;
+  --lyric-on-cover-color: #bbbbbb;
+  --lyric-important-on-cover-color: #ffffff;
+  --lyric-font-size:       16px;
+
+  --link-default-color:    #9a9a9d;
+
+  --line-default-color:    rgba(255, 255, 255, 0.08);
+  --sidebar-splitter:      #ebebec;
+  --sidebar-highlight-background-color: #4d4d4d;
+  --sidebar-hover-background-color: #3c3c3c;
+  --sidebar-hover-text-color: #ffffff;
+
+  --songlist-hover-background-color: #3e3e3e;
+  --songlist-odd-background-color: #2d2d2d;
+
+  --button-background-color:       #323232;
+  --button-border-color:           #323232;
+  --button-hover-background-color: #444444;
+
+  --dialog-background-color: #222222;
+  --dialog-text-color:       #ffffff;
+  --now-playing-close-icon-color: #b3b3b3;
+
+  --footer-player-bar-background-color:     #666666;
+  --footer-player-bar-cur-background-color: #e0e0e0;
+  --footer-player-bar-cur-button-color:     #e0e0e0;
+  --search-input-background-color:          #323232;
+
+  --player-icon-color:       #b3b3b3;
+  --player-icon-hover-color: #eeeeee;
+  --player-right-icon-color: #b3b3b3;
+  --player-right-icon-hover-color: #eeeeee;
+  --volume-icon-color: #b3b3b3;
+
+  --scroll-color: #444444;
+  --white--black: #222222;
+  --black--white: #ffffff;
+  --white--black-background: #ffffff;
+
+  --default-border-radius: 10px;
+  --text-default-size:     13px;
+  --h2-title-font-size:    24px;
+  --badge-font-size:       12px;
+
+  --shadow-mask: rgba(0, 0, 0, 0.5);
+
+  /* mapped aliases */
+  --bg-app:       var(--color-body-bg);
+  --bg-base:      var(--color-body-bg);
+  --bg-raised:    var(--button-background-color);
+  --bg-hover:     var(--songlist-hover-background-color);
+  --bg-active:    var(--theme-color-hover);
+  --text-primary: var(--text-default-color);
+  --text-secondary: var(--text-subtitle-color);
+  --text-muted:   var(--link-default-color);
+  --accent:       var(--theme-color);
+  --accent-hover: #2d91ff;
+  --accent-dim:   var(--theme-color-ope);
+  --border:       var(--line-default-color);
+  --border-strong:rgba(255,255,255,0.12);
+
+  /* Glass surface */
+  --glass-bg:     var(--nav-background-color);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --glass-blur:   none;
+  --nav-backdrop-filter: none;
+  --player-backdrop-filter: none;
+
+  --shadow:       0 12px 32px rgba(0,0,0,0.45), 0 2px 6px rgba(0,0,0,0.28);
+  --shadow-sm:    0 2px 8px rgba(0,0,0,0.3);
+  --shadow-lift:  0 20px 40px -12px rgba(0,0,0,0.6);
+  --radius:       10px;
+  --radius-sm:    8px;
+  --radius-xs:    5px;
+  --scrollbar-thumb: var(--scroll-color);
+
+  color-scheme: dark;
+}
+
+/* Modern white theme */
+[data-theme="light"] {
+  --theme-color:       #017afe;
+  --theme-color-ope:   rgba(1, 122, 254, 0.4);
+  --theme-color-hover: #f0f7ff;
+  --theme-color-glow:  rgba(1, 122, 254, 0.4);
+  --important-color:   #017afe;
+  --icon-default-color:#000000;
+
+  --color-body-bg:         #ffffff;
+  --sidebar-background:    #f2f2f7;
+  --sidebar-button-bg:     #ffffff;
+  --sidebar-button-background: #ffffff;
+  --nav-background-color:  hsla(0, 0%, 100%, 0.86);
+  --content-background-color: #ffffff;
+  --foot-background-color: #ffffff;
+  --windows-border-color:  #dddddd;
+
+  --text-default-color:    #000000;
+  --text-subtitle-color:   #7a7a7b;
+  --text-disable-color:    #b7b7b7;
+
+  --lyric-default-color:   #666666;
+  --lyric-highlight-color: #000000;
+  --lyric-on-cover-color: #333333;
+  --lyric-important-on-cover-color: #ffffff;
+  --lyric-font-size:       16px;
+
+  --link-default-color:    #999999;
+  --line-default-color:    #e5e5e5;
+  --sidebar-splitter:      #1d1d1f;
+  --sidebar-highlight-background-color: #f2f2f3;
+  --sidebar-hover-background-color: #f2f2f3;
+  --sidebar-hover-text-color: #262626;
+
+  --songlist-hover-background-color: #f2f2f7;
+  --songlist-odd-background-color: #f5f5f5;
+
+  --button-background-color:       #f5f5f7;
+  --button-border-color:           #bebebe;
+  --button-hover-background-color: #dddddd;
+
+  --dialog-background-color: #fafafa;
+  --dialog-text-color:       #565656;
+  --now-playing-close-icon-color: #666666;
+
+  --footer-player-bar-background-color:     #e0e0e0;
+  --footer-player-bar-cur-background-color: #666666;
+  --footer-player-bar-cur-button-color:     #111111;
+  --search-input-background-color:          #f2f2f3;
+
+  --player-icon-color:       #666666;
+  --player-icon-hover-color: #666666;
+  --player-right-icon-color: #333333;
+  --player-right-icon-hover-color: #000000;
+  --volume-icon-color: #333333;
+
+  --scroll-color: #c2c2c2;
+  --white--black: #ffffff;
+  --black--white: #222222;
+  --white--black-background: #222222;
+
+  --default-border-radius: 10px;
+  --text-default-size:     13px;
+  --h2-title-font-size:    24px;
+  --badge-font-size:       12px;
+
+  --shadow-mask: rgba(30, 30, 30, 0.5);
+
+  --bg-app:       var(--color-body-bg);
+  --bg-base:      var(--color-body-bg);
+  --bg-raised:    var(--button-background-color);
+  --bg-hover:     var(--songlist-hover-background-color);
+  --bg-active:    var(--theme-color-hover);
+  --text-primary: var(--text-default-color);
+  --text-secondary: var(--text-subtitle-color);
+  --text-muted:   var(--link-default-color);
+  --accent:       var(--theme-color);
+  --accent-hover: #0060d0;
+  --accent-dim:   var(--theme-color-ope);
+  --border:       var(--line-default-color);
+  --border-strong:rgba(0,0,0,0.12);
+
+  --glass-bg:     var(--nav-background-color);
+  --glass-border: rgba(0, 0, 0, 0.06);
+  --glass-blur:   none;
+  --nav-backdrop-filter: none;
+  --player-backdrop-filter: none;
+
+  --shadow:       0 12px 32px rgba(0,0,0,0.10), 0 2px 6px rgba(0,0,0,0.06);
+  --shadow-sm:    0 2px 8px rgba(0,0,0,0.08);
+  --shadow-lift:  0 20px 40px -12px rgba(0,0,0,0.18);
+  --radius:       10px;
+  --radius-sm:    8px;
+  --radius-xs:    5px;
+  --scrollbar-thumb: var(--scroll-color);
+
+  color-scheme: light;
+}
+
+/* Liquid Glass theme */
+[data-theme="liquid-glass"] {
+  --theme-color:       #5ac8fa;
+  --theme-color-ope:   rgba(90, 200, 250, 0.36);
+  --theme-color-hover: rgba(90, 200, 250, 0.18);
+  --theme-color-glow:  rgba(90, 200, 250, 0.42);
+  --important-color:   #2f9cff;
+  --icon-default-color:#0f1720;
+
+  --color-body-bg:         #dfe8ee;
+  --sidebar-background:    rgba(245, 250, 255, 0.36);
+  --sidebar-button-bg:     rgba(255, 255, 255, 0.28);
+  --sidebar-button-background: rgba(255, 255, 255, 0.28);
+  --nav-background-color:  rgba(246, 251, 255, 0.42);
+  --content-background-color: rgba(225, 235, 242, 0.72);
+  --foot-background-color: rgba(246, 251, 255, 0.42);
+  --windows-border-color:  rgba(255, 255, 255, 0.52);
+
+  --text-default-color:    #101820;
+  --text-subtitle-color:   #52616d;
+  --text-disable-color:    #8b99a5;
+
+  --lyric-default-color:   #5e6c77;
+  --lyric-highlight-color: #0c151d;
+  --lyric-on-cover-color: #22313a;
+  --lyric-important-on-cover-color: #ffffff;
+  --lyric-font-size:       16px;
+
+  --link-default-color:    #64727e;
+
+  --line-default-color:    rgba(255, 255, 255, 0.48);
+  --sidebar-splitter:      rgba(255, 255, 255, 0.62);
+  --sidebar-highlight-background-color: rgba(255, 255, 255, 0.46);
+  --sidebar-hover-background-color: rgba(255, 255, 255, 0.38);
+  --sidebar-hover-text-color: #101820;
+
+  --songlist-hover-background-color: rgba(255, 255, 255, 0.36);
+  --songlist-odd-background-color: rgba(255, 255, 255, 0.26);
+
+  --button-background-color:       rgba(255, 255, 255, 0.34);
+  --button-border-color:           rgba(255, 255, 255, 0.42);
+  --button-hover-background-color: rgba(255, 255, 255, 0.52);
+
+  --dialog-background-color: rgba(245, 250, 255, 0.78);
+  --dialog-text-color:       #101820;
+  --now-playing-close-icon-color: #52616d;
+
+  --footer-player-bar-background-color:     rgba(16, 24, 32, 0.18);
+  --footer-player-bar-cur-background-color: #0f1720;
+  --footer-player-bar-cur-button-color:     #0f1720;
+  --search-input-background-color:          rgba(255, 255, 255, 0.35);
+
+  --player-icon-color:       #52616d;
+  --player-icon-hover-color: #101820;
+  --player-right-icon-color: #52616d;
+  --player-right-icon-hover-color: #101820;
+  --volume-icon-color: #52616d;
+
+  --scroll-color: rgba(16, 24, 32, 0.22);
+  --white--black: #ffffff;
+  --black--white: #101820;
+  --white--black-background: rgba(16, 24, 32, 0.72);
+
+  --default-border-radius: 10px;
+  --text-default-size:     14px;
+  --h2-title-font-size:    24px;
+  --badge-font-size:       12px;
+
+  --shadow-mask: rgba(16, 24, 32, 0.34);
+
+  --bg-app:       var(--color-body-bg);
+  --bg-base:      var(--color-body-bg);
+  --bg-raised:    var(--button-background-color);
+  --bg-hover:     var(--songlist-hover-background-color);
+  --bg-active:    var(--theme-color-hover);
+  --text-primary: var(--text-default-color);
+  --text-secondary: var(--text-subtitle-color);
+  --text-muted:   var(--link-default-color);
+  --accent:       var(--theme-color);
+  --accent-hover: #2f9cff;
+  --accent-dim:   var(--theme-color-ope);
+  --border:       var(--line-default-color);
+  --border-strong:rgba(16, 24, 32, 0.16);
+
+  --glass-bg:     rgba(246, 251, 255, 0.48);
+  --glass-border: rgba(255, 255, 255, 0.56);
+  --glass-blur:   saturate(160%) blur(12px);
+  --nav-backdrop-filter: saturate(160%) blur(12px);
+  --player-backdrop-filter: none;
+
+  --shadow:       0 18px 44px rgba(58, 82, 99, 0.18), inset 0 1px 0 rgba(255,255,255,0.65);
+  --shadow-sm:    0 4px 14px rgba(58, 82, 99, 0.12);
+  --shadow-lift:  0 24px 54px rgba(58, 82, 99, 0.22), inset 0 1px 0 rgba(255,255,255,0.72);
+  --radius:       10px;
+  --radius-sm:    8px;
+  --radius-xs:    5px;
+  --scrollbar-thumb: var(--scroll-color);
+
+  color-scheme: light;
+}
+
+/* ─── Layout constants ─── */
+:root {
+  --sidebar-width:    230px;
+  --sidebar-collapsed: 74px;
+  --player-height:    100px;
+  --titlebar-height:  38px;
+  --app-viewport-width: 100vw;
+  --app-viewport-height: 100vh;
+  --app-viewport-width: 100dvw;
+  --app-viewport-height: 100dvh;
+  --app-shell-radius: 8px;
+  --app-edge-gap: 10px;
+  --player-edge-gap: 10px;
+  --mobile-nav-height: 0px;
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --transition:       var(--dur-med) var(--ease-out-quart);
+  --immersive-player-accent: #00f5d4;
+  --immersive-player-accent-rgb: 0, 245, 212;
+  --immersive-player-panel-bg: rgba(0, 0, 0, 0.10);
+  --immersive-player-panel-shadow: inset 0 0 2px 1px rgba(255,255,255,.35), inset 0 0 10px 4px rgba(255,255,255,.15), 0 4px 16px rgba(17,17,26,.05), 0 8px 24px rgba(17,17,26,.05), 0 16px 56px rgba(17,17,26,.05), inset 0 4px 16px rgba(17,17,26,.05), inset 0 8px 24px rgba(17,17,26,.05), inset 0 16px 56px rgba(17,17,26,.05);
+  --immersive-player-button-shadow: inset 0 0 2px 1px rgba(255,255,255,.34), inset 0 0 10px 4px rgba(255,255,255,.13), 0 10px 30px rgba(0,0,0,.18);
+  --immersive-player-button-hover-shadow: inset 0 0 2px 1px rgba(255,255,255,.42), inset 0 0 12px 5px rgba(255,255,255,.17), 0 12px 34px rgba(0,0,0,.22), 0 0 18px rgba(0,245,212,.10);
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, STHeiti, sans-serif;
+  font-size: var(--text-default-size);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+html, body { height: 100%; width: 100%; overflow: hidden; background: transparent; }
+body { color: var(--text-default-color); }
+
+@media (max-width: 720px) {
+  :root {
+    --sidebar-width: 100vw;
+    --sidebar-collapsed: 100vw;
+    --app-shell-radius: 0px;
+    --app-edge-gap: 0px;
+    --player-edge-gap: 8px;
+    --mobile-nav-height: 58px;
+    --h2-title-font-size: 20px;
+  }
+}
+
+/* Scrollbar */
+::-webkit-scrollbar        { width: 8px; height: 8px; background: transparent; }
+::-webkit-scrollbar-thumb  {
+  border-radius: 4px;
+  background: var(--scrollbar-thumb);
+  transition: background var(--dur-fast) var(--ease-soft);
+}
+::-webkit-scrollbar-thumb:hover { background: var(--border-strong); }
+::-webkit-scrollbar-button { display: none; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+/* Reset */
+input:focus, select:focus, textarea:focus, button:focus { outline: none; }
+ul { list-style: none; }
+a { color: inherit; text-decoration: none; cursor: pointer; }
+img { display: block; -webkit-user-drag: none; object-fit: cover; }
+svg { width: 24px; height: 24px; stroke: currentColor; stroke-width: 1;
+      stroke-linecap: round; stroke-linejoin: round; fill: none; cursor: pointer; }
+button { cursor: pointer; border: none; background: none; color: inherit; font: inherit; }
+input, select, textarea { font: inherit; color: inherit; }
+
+/* Selection */
+::selection { background: var(--theme-color-ope); color: var(--text-default-color); }
+
+/* Utilities */
+.truncate { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ═══════════════════════════════════════════════════
+   Keyframes
+   ═══════════════════════════════════════════════════ */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes fadeInScale {
+  from { opacity: 0; transform: scale(0.94); }
+  to   { opacity: 1; transform: scale(1); }
+}
+@keyframes slideInRight {
+  from { opacity: 0; transform: translateX(24px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes slideInDown {
+  from { opacity: 0; transform: translateY(-12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+@keyframes shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes discSpin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+@keyframes pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 var(--theme-color-glow); }
+  50%      { transform: scale(1.05); box-shadow: 0 0 0 8px transparent; }
+}
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-4px); }
+}
+@keyframes eq-bar {
+  0%, 100% { height: 30%; }
+  50%      { height: 100%; }
+}
+@keyframes glow {
+  0%, 100% { box-shadow: 0 0 0 0 var(--theme-color-glow); }
+  50%      { box-shadow: 0 0 0 6px transparent; }
+}
+@keyframes ripple {
+  to { transform: scale(2.4); opacity: 0; }
+}
+
+/* Enter animations for view swap */
+.view-enter {
+  animation: fadeInUp var(--dur-slow) var(--ease-out-quart) both;
+}
+
+/* Skeleton shimmer utility */
+.shimmer-bg {
+  background: linear-gradient(90deg,
+    var(--button-background-color) 25%,
+    var(--button-hover-background-color) 50%,
+    var(--button-background-color) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.6s var(--ease-soft) infinite;
+}
+
+/* Reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Moved from LiquidGlassSurface.svelte (component has no DOM to scope styles to) */
+.listen1-liquid-glass,
+.listen1-liquid-glass-lens {
+  pointer-events: none !important;
+}

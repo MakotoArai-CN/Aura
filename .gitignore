@@ -1,0 +1,17 @@
+# 依赖与构建产物（勿纳入版本库）
+node_modules/
+dist/
+target-codex-check/
+
+# Rust / Tauri 构建产物
+src-tauri/target/
+src-tauri/gen/
+
+# 调试/工具产物
+.playwright-cli/
+.playwright-mcp/
+
+# 系统
+.DS_Store
+Thumbs.db
+*.log
