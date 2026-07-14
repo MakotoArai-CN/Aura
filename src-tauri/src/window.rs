@@ -336,7 +336,6 @@ pub fn show_float_window(
         .min_inner_size(640.0, 72.0)
         .max_inner_size(1920.0, 220.0)
         .decorations(false)
-        .transparent(true)
         .shadow(false)
         .always_on_top(true)
         .skip_taskbar(true)
