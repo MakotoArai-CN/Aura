@@ -18,7 +18,6 @@ pub struct FloatingLyricSettingsState {
 struct FloatingLyricSettingsSnapshot {
     enabled: bool,
     hide_when_main_visible: bool,
-    locked: bool,
 }
 
 impl Default for FloatingLyricSettingsSnapshot {
@@ -26,7 +25,6 @@ impl Default for FloatingLyricSettingsSnapshot {
         Self {
             enabled: false,
             hide_when_main_visible: true,
-            locked: false,
         }
     }
 }
@@ -43,47 +41,25 @@ fn floating_settings_snapshot(payload: &str) -> FloatingLyricSettingsSnapshot {
         .get("hideLyricFloatingWindowWhenMainVisible")
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
-    let Some(lyric_window) = value.get("lyricWindow") else {
-        return FloatingLyricSettingsSnapshot {
-            enabled,
-            hide_when_main_visible,
-            locked: false,
-        };
-    };
-    let remember = lyric_window
-        .get("rememberLockState")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(true);
-    let locked = remember
-        && lyric_window
-            .get("locked")
-            .and_then(|value| value.as_bool())
-            .unwrap_or(false);
 
     FloatingLyricSettingsSnapshot {
         enabled,
         hide_when_main_visible,
-        locked,
     }
 }
 
-fn floating_settings_locked(payload: &str) -> bool {
-    floating_settings_snapshot(payload).locked
-}
 
+/// 浮窗始终接收鼠标事件（ignore=false）。
+/// 锁定穿透由前端用透明像素 + pointer-events 实现：
+/// Tauri 没有 Electron 的 setIgnoreMouseEvents({ forward: true })，
+/// 一旦 set_ignore_cursor_events(true) 就无法 hover/点击解锁。
 fn apply_float_ignore_from_settings(
     app: &AppHandle,
-    state: &tauri::State<'_, FloatingLyricSettingsState>,
+    _state: &tauri::State<'_, FloatingLyricSettingsState>,
 ) {
-    let locked = state
-        .payload
-        .lock()
-        .ok()
-        .and_then(|payload| payload.clone())
-        .map(|payload| floating_settings_locked(&payload))
-        .unwrap_or(false);
     if let Some(float) = app.get_webview_window("float") {
-        let _ = float.set_ignore_cursor_events(locked);
+        let _ = float.set_ignore_cursor_events(false);
+        let _ = float.set_always_on_top(true);
     }
 }
 
@@ -143,7 +119,7 @@ pub fn set_floating_lyric_settings(
     *state.payload.lock().map_err(|e| e.to_string())? = Some(payload.clone());
     // 唯一设置通道：Tauri emit（低频）。浮窗端 listen("lyric-settings-update") 接收。
     let _ = app.emit_to("float", "lyric-settings-update", payload.clone());
-    // 写入快照后同步鼠标穿透（locked）。
+    // 确保浮窗可交互（锁定穿透由前端透明像素处理）。
     apply_float_ignore_from_settings(&app, &state);
     Ok(())
 }
@@ -439,6 +415,8 @@ pub fn close_float_window(_app: AppHandle) -> Result<(), String> {
 pub fn set_float_window_ignore_mouse(app: AppHandle, ignore: bool) {
     if let Some(float) = app.get_webview_window("float") {
         let _ = float.set_ignore_cursor_events(ignore);
+        // Windows: set_ignore_cursor_events 会导致 WS_EX_TOPMOST 丢失，需重新置顶
+        let _ = float.set_always_on_top(true);
     }
 }
 

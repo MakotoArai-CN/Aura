@@ -4,6 +4,7 @@
   import { settings } from "../../lib/stores/settings";
   import { cssImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
+  import { extractAccentPair, type Rgb } from "../../lib/coverAccent";
   import NowPlayingView from "../views/NowPlayingView.svelte";
   import { fade, fly } from "svelte/transition";
 
@@ -33,6 +34,20 @@
   let isNowPlaying = $derived(activeView.type === "nowplaying");
   let currentCoverUrl = $derived(proxyResourceUrl($playerState.currentTrack?.img_url));
   let coverBackground = $derived(cssImageUrl($playerState.currentTrack?.img_url));
+  // 从封面动态提取主/副色，注入 CSS 变量做多色渐变（取色失败保留 app.css 的静态默认）。
+  let accentPrimary = $state<Rgb | null>(null);
+  let accentSecondary = $state<Rgb | null>(null);
+  let accentStyle = $derived.by(() => {
+    if (!accentPrimary || !accentSecondary) return "";
+    const p = accentPrimary;
+    const s = accentSecondary;
+    return (
+      `--immersive-player-accent:rgb(${p.r} ${p.g} ${p.b});` +
+      `--immersive-player-accent-rgb:${p.r}, ${p.g}, ${p.b};` +
+      `--immersive-player-accent2:rgb(${s.r} ${s.g} ${s.b});` +
+      `--immersive-player-accent2-rgb:${s.r}, ${s.g}, ${s.b};`
+    );
+  });
   let coverSwitchDirection = $state<"next" | "prev" | "">("");
   let lastCoverIndex = -1;
   let lastCoverTrackId = "";
@@ -141,6 +156,31 @@
   }
 
   $effect(() => {
+    const url = currentCoverUrl;
+    let cancelled = false;
+    if (!url) {
+      accentPrimary = null;
+      accentSecondary = null;
+      return;
+    }
+    extractAccentPair(url)
+      .then((pair) => {
+        if (cancelled) return;
+        accentPrimary = pair?.primary ?? null;
+        accentSecondary = pair?.secondary ?? null;
+      })
+      .catch(() => {
+        if (!cancelled) {
+          accentPrimary = null;
+          accentSecondary = null;
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  });
+
+  $effect(() => {
     const track = $playerState.currentTrack;
     if (track) {
       document.title = $playerState.playing
@@ -196,7 +236,9 @@
   class="immersive-player"
   class:empty={!$playerState.currentTrack}
   class:expanded={isNowPlaying}
+  class:has-accent={accentPrimary}
   data-immersive-player
+  style={accentStyle}
 >
   <div class="native-shell" style:--cover-image={coverBackground}>
     <div class="cover-wash" aria-hidden="true"></div>
@@ -457,7 +499,8 @@
     border-radius: 28px;
     border: 1px solid rgba(255, 255, 255, 0.16);
     background:
-      radial-gradient(circle at 50% 0%, rgba(var(--immersive-player-accent-rgb), 0.12), transparent 36%),
+      radial-gradient(circle at 18% 0%, rgba(var(--immersive-player-accent-rgb), 0.16), transparent 40%),
+      radial-gradient(circle at 88% 8%, rgba(var(--immersive-player-accent2-rgb, var(--immersive-player-accent-rgb)), 0.13), transparent 42%),
       linear-gradient(135deg, rgba(28, 31, 38, 0.92), rgba(13, 15, 20, 0.88) 52%, rgba(10, 12, 17, 0.94));
     box-shadow:
       var(--immersive-player-panel-shadow),
@@ -474,8 +517,8 @@
     border-radius: 0;
     border-color: transparent;
     background:
-      radial-gradient(circle at 22% 16%, rgba(var(--immersive-player-accent-rgb), 0.16), transparent 30%),
-      radial-gradient(circle at 74% 72%, rgba(93, 95, 239, 0.12), transparent 32%),
+      radial-gradient(circle at 22% 16%, rgba(var(--immersive-player-accent-rgb), 0.18), transparent 34%),
+      radial-gradient(circle at 78% 74%, rgba(var(--immersive-player-accent2-rgb, var(--immersive-player-accent-rgb)), 0.16), transparent 36%),
       linear-gradient(135deg, rgba(18, 20, 27, 0.98), rgba(7, 9, 14, 0.98));
     box-shadow: none;
   }
@@ -750,7 +793,7 @@
     color: #071015;
     background:
       radial-gradient(circle at 32% 24%, rgba(255,255,255,0.92), rgba(255,255,255,0.28) 38%, transparent 39%),
-      linear-gradient(135deg, #bdfef3, var(--immersive-player-accent) 48%, #68d8ff);
+      linear-gradient(135deg, var(--immersive-player-accent2, #bdfef3), var(--immersive-player-accent) 52%, var(--immersive-player-accent2, #68d8ff));
     box-shadow:
       var(--immersive-player-button-shadow),
       0 0 24px rgba(var(--immersive-player-accent-rgb), 0.18);
@@ -856,7 +899,7 @@
     position: relative;
     height: 100%;
     border-radius: inherit;
-    background: linear-gradient(90deg, #ffffff, var(--immersive-player-accent));
+    background: linear-gradient(90deg, var(--immersive-player-accent2, #ffffff), var(--immersive-player-accent));
   }
 
   .fill span {

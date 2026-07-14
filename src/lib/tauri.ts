@@ -230,8 +230,6 @@ export const windowQuit = () => invoke("window_quit");
 export const showFloatWindow = () => invoke("show_float_window");
 export const hideFloatWindow = () => invoke("hide_float_window");
 export const closeFloatWindow = () => invoke("close_float_window");
-export const setFloatIgnoreMouse = (ignore: boolean) =>
-  invoke("set_float_window_ignore_mouse", { ignore });
 export const setFloatWindowHeight = (height: number) =>
   invoke("set_float_window_height", { height });
 export const moveFloatWindow = (x: number, y: number) =>

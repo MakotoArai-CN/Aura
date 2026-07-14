@@ -1,13 +1,14 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { closeFloatWindow as closeNativeFloatWindow, emitTo, getFloatingLyricPayload, getFloatingLyricSettings, getFloatWindowPosition, hideFloatWindow, listen, moveFloatWindow, setFloatIgnoreMouse, setFloatWindowHeight } from "./lib/tauri";
+  import { closeFloatWindow as closeNativeFloatWindow, emitTo, getFloatingLyricPayload, getFloatingLyricSettings, getFloatWindowPosition, hideFloatWindow, listen, moveFloatWindow, setFloatWindowHeight } from "./lib/tauri";
   import { type AppSettings } from "./lib/stores/settings";
   import { getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, type LyricVariantMode } from "./lib/lyrics";
 
   type VariantKind = "translation" | "phonetic";
 
-  // 浮窗为纯被动视图：歌词内容 + availability 从主窗推送的 payload 来，
-  // 所有配置（含 variantMode/locked）从 lyricWindow 快照派生。浮窗不持有可写的第二真相源。
+  // 浮窗为被动视图：歌词 + 设置由主窗推送。
+  // 锁定不使用 set_ignore_cursor_events（Tauri 无 forward，一旦穿透就无法点解锁）；
+  // 改用透明像素穿透 + 锁定时常显工具栏。
   let lyric = $state("等待歌词");
   let tlyric = $state("");
   let variantKind = $state<VariantKind>("translation");
@@ -39,16 +40,11 @@
   let lastFloatHeight = 0;
   let lastAppliedSeq = 0;
 
-  // variantMode / locked 单一派生自 lyricWindow 快照，无本地可写副本。
   let variantAvailability = $derived({ hasTranslation, hasPhonetic });
   let variantMode = $derived<LyricVariantMode>(
     normalizeLyricVariantMode(lyricWindow.variantMode, variantAvailability)
   );
   let locked = $derived(Boolean(lyricWindow.locked));
-
-  function syncFloatMousePassthrough() {
-    void setFloatIgnoreMouse(locked).catch(() => undefined);
-  }
 
   function applyLyricPayload(payload: {
     lyric: string;
@@ -106,9 +102,7 @@
     hideLyricFloatingWindowWhenMainVisible?: boolean;
   }) {
     if (payload.lyricWindow) {
-      const wasLocked = lyricWindow.locked;
       lyricWindow = { ...lyricWindow, ...payload.lyricWindow };
-      if (Boolean(lyricWindow.locked) !== Boolean(wasLocked)) syncFloatMousePassthrough();
     }
     if (typeof payload.enableLyricFloatingWindow === "boolean") {
       enableFloatWindow = payload.enableLyricFloatingWindow;
@@ -187,24 +181,23 @@
   });
 
   function onMouseEnter() {
-    if (locked) return;
-    void setFloatIgnoreMouse(false).catch(() => undefined);
     showToolbar = true;
   }
 
   function onMouseLeave() {
-    showToolbar = false;
+    // 锁定时工具栏常显（用于解锁），不因 leave 隐藏
+    if (!locked) showToolbar = false;
   }
 
   function toggleLock() {
-    // 只发请求给主窗；主窗 patch settings 后经设置通道回流，locked 派生自动更新。
+    // 乐观更新本地 locked，主窗 patch 后经 settings 回流校正。
     const nextLocked = !locked;
+    lyricWindow = { ...lyricWindow, locked: nextLocked };
+    showToolbar = true;
     void emitTo("main", "float-lyric-lock-changed", { locked: nextLocked }).catch(() => undefined);
-    showToolbar = !nextLocked;
   }
 
   async function closeFloatWindow() {
-    await setFloatIgnoreMouse(false).catch(() => undefined);
     void emitTo("main", "float-lyric-closed", {}).catch(() => undefined);
     await closeNativeFloatWindow()
       .catch(() => hideFloatWindow())
@@ -304,7 +297,7 @@
   let lyricStyleClass = $derived(`scheme-${lyricWindow.colorScheme}`);
   let variantActive = $derived(isLyricVariantModeActive(variantMode, variantAvailability));
   let hasVariant = $derived(Boolean(tlyric && variantMode !== "off"));
-  let showTwoLines = $derived(Boolean(lyricWindow.lines === 2 && !hasVariant && nextLyric));
+  let showTwoLines = $derived(Boolean(lyricWindow.lines === 2 && nextLyric));
   let staggeredLayout = $derived(Boolean(lyricWindow.staggeredLayout && showTwoLines));
   let lyricPayloadKey = $derived(`${lyric}:${tlyric}:${variantKind}:${variantMode}:${nextLyric}:${showTwoLines}:${staggeredLayout}`);
   let floatHeight = $derived(Math.max(72, Math.min(220, Math.round(
@@ -317,6 +310,8 @@
   let toolbarColor = $derived(toolbarTextColor(lyricWindow.colorScheme, lyricWindow.color));
   let toolbarButtonBg = $derived(toolbarButtonBackground(lyricWindow.colorScheme, lyricWindow.color));
   let toolbarBackgroundAlpha = $derived(Math.min(0.72, Math.max(0.26, lyricWindow.backgroundAlpha + 0.16)));
+  // 锁定时工具栏常显，保证解锁按钮始终可点
+  let toolbarVisible = $derived(locked || showToolbar);
 
   $effect(() => {
     if (Math.abs(floatHeight - lastFloatHeight) < 2) return;
@@ -330,13 +325,13 @@
   class:locked
   class:two-lines={showTwoLines}
   class:staggered={staggeredLayout}
-  style="font-size: {lyricWindow.fontSize}px; min-height: {floatHeight}px; --lyric-custom-color: {lyricWindow.color}; --lyric-gradient-from: {lyricWindow.gradientFrom ?? '#7cf7c8'}; --lyric-gradient-to: {lyricWindow.gradientTo ?? '#f0a6ff'}; --float-bg-alpha: {lyricWindow.backgroundAlpha}; --float-toolbar-color: {toolbarColor}; --float-toolbar-button-bg: {toolbarButtonBg}; --float-toolbar-bg: rgba(18,18,18,{toolbarBackgroundAlpha}); background: transparent; color: {lyricWindow.color};"
+  style="font-size: {lyricWindow.fontSize}px; min-height: {floatHeight}px; --lyric-custom-color: {lyricWindow.color}; --lyric-gradient-from: {lyricWindow.gradientFrom ?? '#7cf7c8'}; --lyric-gradient-to: {lyricWindow.gradientTo ?? '#f0a6ff'}; --float-bg-alpha: {locked ? 0 : lyricWindow.backgroundAlpha}; --float-toolbar-color: {toolbarColor}; --float-toolbar-button-bg: {toolbarButtonBg}; --float-toolbar-bg: rgba(18,18,18,{toolbarBackgroundAlpha}); color: {lyricWindow.color};"
   onmouseenter={onMouseEnter}
   onmouseleave={onMouseLeave}
   role="region"
   aria-label="浮动歌词"
 >
-  <div class="toolbar safe-toolbar" class:visible={showToolbar}>
+  <div class="toolbar safe-toolbar" class:visible={toolbarVisible} class:locked-toolbar={locked}>
     {#if !locked}
       <button class="tb-btn variant-btn" class:active={variantActive} disabled={!hasTranslation && !hasPhonetic} onclick={toggleVariantMode} title={variantButtonTitle()}>{variantButtonLabel()}</button>
       <button class="tb-btn" onclick={() => patchLyricWindow({ fontSize: Math.max(14, lyricWindow.fontSize - 2) })} title="缩小字体">A-</button>
@@ -344,7 +339,7 @@
       <button class="tb-btn" onclick={() => patchLyricWindow({ backgroundAlpha: Math.max(0, lyricWindow.backgroundAlpha - 0.1) })} title="降低背景">◐-</button>
       <button class="tb-btn" onclick={() => patchLyricWindow({ backgroundAlpha: Math.min(1, lyricWindow.backgroundAlpha + 0.1) })} title="提高背景">◐+</button>
     {/if}
-    <button class="tb-btn" onclick={toggleLock} title={locked ? "解锁" : "锁定"}>
+    <button class="tb-btn" type="button" onclick={toggleLock} title={locked ? "解锁" : "锁定"}>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         {#if locked}
           <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
@@ -353,7 +348,7 @@
         {/if}
       </svg>
     </button>
-    <button class="tb-btn" onclick={closeFloatWindow} title="关闭桌面歌词">
+    <button class="tb-btn" type="button" onclick={closeFloatWindow} title="关闭桌面歌词">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M18 6 6 18M6 6l12 12"/>
       </svg>
@@ -410,11 +405,22 @@
     filter: none;
     background: transparent !important;
     transition: min-height 0.18s ease;
+    pointer-events: none;
+  }
+
+  /* 未锁定时窗口本体可接收 hover；锁定时仅工具栏可点，其余透明穿透 */
+  .float-window:not(.locked) {
+    pointer-events: auto;
+  }
+
+  .float-window.locked {
+    background: transparent !important;
   }
 
   .float-window.locked .lyric-content {
     cursor: default;
     pointer-events: none !important;
+    background: transparent !important;
   }
 
   .safe-toolbar {
@@ -423,6 +429,11 @@
   }
 
   .safe-toolbar.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .safe-toolbar.locked-toolbar {
     opacity: 1;
     pointer-events: auto;
   }
@@ -441,6 +452,7 @@
     outline: 0;
     box-shadow: none;
     filter: none;
+    pointer-events: auto;
   }
 
   .lyric-stack {

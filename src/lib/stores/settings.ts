@@ -130,6 +130,10 @@ function loadSettings(): AppSettings {
       const next = { ...defaults, ...parsed };
       next.audioCache = { ...defaults.audioCache, ...(parsed.audioCache ?? {}) };
       next.lyricWindow = { ...defaults.lyricWindow, ...(parsed.lyricWindow ?? {}) };
+      // 未开启「记住锁定状态」时，每次启动都回到未锁定，避免桌面歌词默认卡在锁定穿透。
+      if (!next.lyricWindow.rememberLockState) {
+        next.lyricWindow.locked = false;
+      }
       // Migrate legacy flags: variantMode is now the single source of truth.
       // If an old profile has no variantMode, derive it from the retired
       // enableLyricFloatingWindowTranslation flag so the user's choice survives.
