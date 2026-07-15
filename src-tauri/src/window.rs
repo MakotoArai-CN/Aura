@@ -1,4 +1,3 @@
-#[cfg(desktop)]
 use tauri::Manager;
 use std::sync::Mutex;
 use tauri::Emitter;
@@ -53,6 +52,7 @@ fn floating_settings_snapshot(payload: &str) -> FloatingLyricSettingsSnapshot {
 /// 锁定穿透由前端用透明像素 + pointer-events 实现：
 /// Tauri 没有 Electron 的 setIgnoreMouseEvents({ forward: true })，
 /// 一旦 set_ignore_cursor_events(true) 就无法 hover/点击解锁。
+#[cfg(desktop)]
 fn apply_float_ignore_from_settings(
     app: &AppHandle,
     _state: &tauri::State<'_, FloatingLyricSettingsState>,
@@ -61,6 +61,13 @@ fn apply_float_ignore_from_settings(
         let _ = float.set_ignore_cursor_events(false);
         let _ = float.set_always_on_top(true);
     }
+}
+
+#[cfg(not(desktop))]
+fn apply_float_ignore_from_settings(
+    _app: &AppHandle,
+    _state: &tauri::State<'_, FloatingLyricSettingsState>,
+) {
 }
 
 #[cfg(desktop)]
@@ -257,19 +264,24 @@ pub async fn clear_login_cookies(_app: AppHandle, _url: String, _names: Vec<Stri
 }
 
 #[tauri::command]
+#[cfg(desktop)]
 pub fn window_minimize(window: WebviewWindow) {
     #[cfg(debug_assertions)]
     eprintln!("[listen1] window_minimize");
     let app = window.app_handle().clone();
     let is_main = window.label() == "main";
     let _ = window.minimize();
-    #[cfg(desktop)]
     if is_main {
         sync_float_visibility_for_main(&app, false);
     }
 }
 
 #[tauri::command]
+#[cfg(not(desktop))]
+pub fn window_minimize(_window: WebviewWindow) {}
+
+#[tauri::command]
+#[cfg(desktop)]
 pub fn window_maximize(window: WebviewWindow) {
     #[cfg(debug_assertions)]
     eprintln!("[listen1] window_maximize");
@@ -281,17 +293,25 @@ pub fn window_maximize(window: WebviewWindow) {
 }
 
 #[tauri::command]
+#[cfg(not(desktop))]
+pub fn window_maximize(_window: WebviewWindow) {}
+
+#[tauri::command]
+#[cfg(desktop)]
 pub fn window_close(window: WebviewWindow) {
     #[cfg(debug_assertions)]
     eprintln!("[listen1] window_close");
     let app = window.app_handle().clone();
     let is_main = window.label() == "main";
     let _ = window.hide();
-    #[cfg(desktop)]
     if is_main {
         sync_float_visibility_for_main(&app, false);
     }
 }
+
+#[tauri::command]
+#[cfg(not(desktop))]
+pub fn window_close(_window: WebviewWindow) {}
 
 #[tauri::command]
 pub fn window_quit(app: AppHandle) {
