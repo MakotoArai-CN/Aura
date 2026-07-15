@@ -1,6 +1,6 @@
-# Listen1 Desktop Tauri
+# Aura
 
-Listen1 的 Tauri 2 重构版。目标是保留 Listen1 原版现代播放器体验，同时补齐本地音乐、桌面歌词、缓存、下载和跨平台构建能力。
+Aura 是一个跨平台音乐播放器，基于 Tauri 2 + Svelte 5 构建。聚合多个音乐平台，支持本地音乐、桌面歌词、智能缓存和歌曲下载。
 
 ## 功能概览
 
@@ -10,10 +10,10 @@ Listen1 的 Tauri 2 重构版。目标是保留 Listen1 原版现代播放器体
 | 本地音乐 | 支持 MP3、FLAC、M4A、MP4 音频、AAC、OGG、OPUS、WAV、AIFF、WEBM；读取封面、标题、歌手、专辑和内嵌歌词 |
 | 播放器 | 现代底部播放器、展开播放页、播放队列、歌词滚动、桌面浮动歌词 |
 | 下载 | 歌曲列表提供下载按钮，默认保存到系统音乐目录，可在设置页修改 |
-| 智能缓存 | 默认缓存到用户目录 `Listen1/Cache`，上限 2GB；按播放次数、最近访问时间和文件大小评分，长期低分缓存自动清理 |
+| 智能缓存 | 默认缓存到用户目录，上限 2GB；按播放次数、最近访问时间和文件大小评分，长期低分缓存自动清理 |
 | 系统能力 | 托盘、窗口控制、全局快捷键、开机自启动 |
 | 主题 | 现代黑、现代白、Liquid Glass；主题切换带点击处圆形扩散动画 |
-| 构建 | 桌面三平台自动工作流，Android/iOS 手动工作流入口 |
+| 构建 | Windows / macOS / Linux / Android 自动构建工作流 |
 
 ## 技术栈
 
@@ -23,14 +23,13 @@ Listen1 的 Tauri 2 重构版。目标是保留 Listen1 原版现代播放器体
 | 前端 | Svelte 5 + Vite 6 |
 | 包管理器 | Bun |
 | 音频播放 | Howler.js |
-| 后端请求 | Rust `reqwest` 统一代理并注入平台请求头 |
+| 后端请求 | Rust `reqwest` (rustls-tls) 统一代理并注入平台请求头 |
 | 本地音乐标签 | Rust `lofty` |
 | 本地能力 | Tauri dialog/fs/shell/store/autostart/global-shortcut 插件 |
 
 ## 开发
 
 ```bash
-cd listen1_tauri
 bun install
 bun run tauri:dev
 ```
@@ -55,10 +54,7 @@ bun run tauri:ios:init
 bun run tauri:ios:build
 ```
 
-GitHub Actions 中：
-
-- `desktop` 自动构建 Windows、macOS、Linux 包。
-- `android` 和 `ios` 通过 `workflow_dispatch` 手动触发，适合配置 SDK/签名后使用。
+GitHub Actions：推送 `package.json` 或 `src-tauri/tauri.conf.json` 版本变更到 `main` 分支时自动触发全平台构建和发布。也可通过 `workflow_dispatch` 手动触发。
 
 ## 缓存策略
 
@@ -85,7 +81,7 @@ file:///C:/Music/demo.flac
 ## 项目结构
 
 ```text
-listen1_tauri/
+Aura/
   src/                Svelte 前端
   src-tauri/src/      Rust 后端命令、代理、窗口、缓存、本地音乐标签
   src-tauri/capabilities/
@@ -102,4 +98,11 @@ cd src-tauri
 cargo check --features custom-protocol
 ```
 
-涉及 WebView、IPC、窗口按钮、本地音乐播放、桌面歌词和下载时，应使用真实 Tauri WebView 验证，不只用浏览器预览。
+## 鸣谢
+
+- [listen1_desktop](https://github.com/listen1/listen1_desktop)
+
+## todolist
+
+- [ ] 桌面歌词一直有bug，一直没修好
+- [ ] 移动端适配？（不确定，应该没人要吧）

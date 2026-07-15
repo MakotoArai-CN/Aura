@@ -45,6 +45,9 @@
   let lastCloseControlId = "";
   let payloadSeq = 0;
   let prevFloatEnabled: boolean | null = null;
+  let prevHideWhenMainVisible: boolean | null = null;
+  let prevHideWhenMainVisible: boolean | null = null;
+  let prevHideWhenMainVisible: boolean | null = null;
 
   function fallbackPayload(): FloatingLyricPayload {
     const track = $playerState.currentTrack;
@@ -373,7 +376,12 @@
     // 仅 false→true 的显式开启视为「用户主动开启」，此时无条件显示浮窗以给出反馈、便于定位；
     // 挂载或其它设置变化则遵循「主界面可见时隐藏」。后续自动隐藏由 focus/visibilitychange 事件驱动。
     const justEnabledByUser = prevFloatEnabled === false && enabled;
+    // 忽略 enabled/hideWhenMainVisible 以外的设置变化（如 lock 切换），
+    // 否则 settings.patch 替换整个对象导致此 effect 误触发 hideFloatWindow。
+    const relevantChanged = enabled !== prevFloatEnabled || hideWhenMainVisible !== prevHideWhenMainVisible;
     prevFloatEnabled = enabled;
+    prevHideWhenMainVisible = hideWhenMainVisible;
+    if (!relevantChanged) return;
 
     if (!enabled) {
       hideFloatWindow();

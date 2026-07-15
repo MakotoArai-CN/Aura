@@ -1,15 +1,15 @@
 [package]
-name = "listen1"
+name = "aura"
 version = "1.0.0"
-description = "One for all free music in China"
-authors = ["Listen 1"]
+description = "One for all free music"
+authors = ["MakotoArai"]
 license = "MIT"
-repository = "https://github.com/listen1/listen1_desktop"
+repository = "https://github.com/MakotoArai-CN/Aura"
 edition = "2021"
 rust-version = "1.88.0"
 
 [lib]
-name = "listen1_lib"
+name = "aura_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

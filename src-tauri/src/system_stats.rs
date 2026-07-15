@@ -10,13 +10,13 @@ pub struct ResourceUsage {
     webview_count: usize,
 }
 
-fn is_listen1_webview(process_name: &str, command: &str, parent: Option<Pid>, app_pid: Pid) -> bool {
+fn is_aura_webview(process_name: &str, command: &str, parent: Option<Pid>, app_pid: Pid) -> bool {
     let name = process_name.to_ascii_lowercase();
     let cmd = command.to_ascii_lowercase();
     if parent == Some(app_pid) && (name.contains("webview") || name.contains("msedgewebview2")) {
         return true;
     }
-    name.contains("msedgewebview2") && cmd.contains("webview-exe-name=listen1.exe")
+    name.contains("msedgewebview2") && cmd.contains("webview-exe-name=aura.exe")
 }
 
 /// 持久 System 单例：复用跨调用状态，避免每次 System::new_all() 全量枚举所有子系统。
@@ -56,7 +56,7 @@ pub fn get_resource_usage() -> ResourceUsage {
             .collect::<Vec<_>>()
             .join(" ");
         let is_app = *pid == app_pid;
-        let is_webview = is_listen1_webview(&name, &command, process.parent(), app_pid);
+        let is_webview = is_aura_webview(&name, &command, process.parent(), app_pid);
         if !is_app && !is_webview {
             continue;
         }
