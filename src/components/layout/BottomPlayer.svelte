@@ -6,6 +6,7 @@
   import { proxyResourceUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
   import { toast } from "../../lib/stores/toast";
+  import { openExternalUrl } from "../../lib/tauri";
   import LiquidGlassSurface from "../effects/LiquidGlassSurface.svelte";
   import NowPlayingView from "../views/NowPlayingView.svelte";
   import { fade, fly } from "svelte/transition";
@@ -772,7 +773,7 @@
                   <svg viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></svg>
                 </button>
                 {#if track.source_url}
-                  <button type="button" class="icon" onclick={(e) => { e.stopPropagation(); window.open(track.source_url, "_blank"); }} aria-label="打开来源">
+                  <button type="button" class="icon" onclick={(e) => { e.stopPropagation(); void openExternalUrl(track.source_url!); }} aria-label="打开来源">
                     <svg viewBox="0 0 24 24"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
                   </button>
                 {/if}

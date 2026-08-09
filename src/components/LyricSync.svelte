@@ -46,8 +46,6 @@
   let payloadSeq = 0;
   let prevFloatEnabled: boolean | null = null;
   let prevHideWhenMainVisible: boolean | null = null;
-  let prevHideWhenMainVisible: boolean | null = null;
-  let prevHideWhenMainVisible: boolean | null = null;
 
   function fallbackPayload(): FloatingLyricPayload {
     const track = $playerState.currentTrack;

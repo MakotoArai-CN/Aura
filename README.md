@@ -2,6 +2,8 @@
 
 Aura 是一个跨平台音乐播放器，基于 Tauri 2 + Svelte 5 构建。聚合多个音乐平台，支持本地音乐、桌面歌词、智能缓存和歌曲下载。
 
+> 本项目基于**listen1_desktop**项目二次开发，在原有项目上使用新技术栈迁移而来，仅用于学习交流，如有侵权请联系我方删除
+
 ## 功能概览
 
 | 模块 | 说明 |
@@ -75,8 +77,6 @@ GitHub Actions：推送 `package.json` 或 `src-tauri/tauri.conf.json` 版本变
 file:///C:/Music/demo.flac
 -> http://127.0.0.1:<port>/stream/<encoded-url>
 ```
-
-这样可以规避 WebView 的 `ERR_UNKNOWN_URL_SCHEME`，同时支持 FLAC、MP4 音频等格式播放。
 
 ## 项目结构
 

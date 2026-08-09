@@ -233,16 +233,17 @@ pub fn read_audio_tags(path: String) -> Result<AudioMeta, String> {
 
 #[tauri::command]
 pub fn scan_music_directory(directory: String) -> Result<Vec<String>, String> {
-    let root = PathBuf::from(directory);
+    let root = PathBuf::from(&directory);
     if !root.exists() {
-        return Err("music directory does not exist".to_string());
+        return Err(format!("目录不存在: {directory}"));
     }
     if !root.is_dir() {
-        return Err("music directory is not a folder".to_string());
+        return Err(format!("路径不是文件夹: {directory}"));
     }
 
     let mut files = Vec::new();
-    scan_dir_recursive(root, &mut files, 20_000)?;
+    scan_dir_recursive(root, &mut files, 20_000)
+        .map_err(|e| format!("扫描目录失败 ({directory}): {e}"))?;
     files.sort();
     files.dedup();
     Ok(files)

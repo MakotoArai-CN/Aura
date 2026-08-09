@@ -15,6 +15,10 @@
     setProxyConfig,
     type AudioCacheStats,
     type ResourceUsage,
+    getUpdateAssets,
+    downloadAndRunUpdate,
+    openExternalUrl,
+    type UpdateAsset,
   } from "../../lib/tauri";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "../../lib/shortcuts";
   import { SEARCHABLE_SOURCES } from "../../lib/providers/index";
@@ -48,7 +52,7 @@
 
   const PROXY_PROTOCOLS = ["http", "https", "socks5", "socks4"];
   const APP_VERSION = "1.0.0";
-  const GITHUB_REPO = "listen1/listen1_desktop";
+  const GITHUB_REPO = "MakotoArai-CN/Aura";
   const LYRIC_COLOR_SCHEMES = [
     { id: "classic", name: "经典白", preview: "linear-gradient(135deg, #ffffff, #d7e1ff)" },
     { id: "gold", name: "暖金", preview: "linear-gradient(135deg, #fff1b8, #ffb86b)" },
@@ -71,6 +75,9 @@
   let showKeyboardShortcutSettings = $state(false);
   let showGlobalShortcutSettings = $state(false);
   let latestVersion = $state("");
+  let updateAssets = $state<UpdateAsset[]>([]);
+  let updateDownloading = $state(false);
+  let updateError = $state("");
   let themeRipple = $state<{
     x: number;
     y: number;
@@ -152,9 +159,37 @@
     try {
       const version = await fetchLatestTag();
       latestVersion = version && compareVersions(version, APP_VERSION) > 0 ? version : "";
+      if (latestVersion) {
+        try {
+          updateAssets = await getUpdateAssets(latestVersion);
+        } catch {
+          updateAssets = [];
+        }
+      } else {
+        updateAssets = [];
+      }
+      updateError = "";
     } catch (error) {
       console.warn("[Settings] version check failed", error);
       latestVersion = "";
+      updateAssets = [];
+    }
+  }
+
+  async function handleUpdate(asset: UpdateAsset) {
+    updateDownloading = true;
+    updateError = "";
+    try {
+      await downloadAndRunUpdate(asset.url, asset.filename);
+    } catch (error) {
+      const msg = String(error);
+      if (msg.includes("MOBILE_OPEN_URL")) {
+        await openExternalUrl(asset.url);
+        updateDownloading = false;
+      } else {
+        updateError = msg;
+        updateDownloading = false;
+      }
     }
   }
 
@@ -348,7 +383,8 @@
       toast.success(`扫描完成：新增 ${result.added} 首，更新 ${result.updated} 首`);
     } catch (error) {
       console.error("[Settings] scan local music failed", error);
-      toast.error("扫描音乐目录失败");
+      const detail = error instanceof Error ? error.message : String(error ?? "");
+      toast.error(detail ? `扫描音乐目录失败：${detail}` : "扫描音乐目录失败");
     } finally {
       scanningMusic = false;
     }
@@ -928,8 +964,24 @@
           {/if}
         </strong>
       </div>
+      {#if latestVersion && updateAssets.length > 0}
+        <div class="update-section">
+          {#if updateError}
+            <p class="update-error">{updateError}</p>
+          {/if}
+          {#if updateDownloading}
+            <p class="update-status">正在下载更新...</p>
+          {:else}
+            {#each updateAssets as asset}
+              <button type="button" class="action-btn update-btn" onclick={() => handleUpdate(asset)}>
+                {asset.label}
+              </button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
       <div><span>技术栈</span><strong>Svelte 5 / Vite / Tauri 2</strong></div>
-      <a href="https://github.com/listen1/listen1_desktop" target="_blank">GitHub</a>
+      <a href="https://github.com/MakotoArai-CN/Aura" target="_blank">GitHub</a>
     </div>
   </section>
 
@@ -1531,6 +1583,32 @@
   .version-line b {
     color: var(--theme-color);
     font-size: 14px;
+  }
+
+  .update-section {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    grid-column: 1 / -1;
+  }
+
+  .update-btn {
+    font-size: 12px;
+    padding: 4px 10px;
+  }
+
+  .update-status {
+    font-size: 13px;
+    color: var(--theme-color);
+    margin: 0;
+  }
+
+  .update-error {
+    font-size: 13px;
+    color: #e74c3c;
+    margin: 0;
+    width: 100%;
   }
 
   .theme-ripple {

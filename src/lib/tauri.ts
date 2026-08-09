@@ -338,3 +338,15 @@ export async function isAutostartEnabled(): Promise<boolean> {
   if (!isTauriRuntime()) return false;
   return isAutostartEnabledPlugin();
 }
+
+export interface UpdateAsset {
+  label: string;
+  url: string;
+  filename: string;
+}
+
+export const getUpdateAssets = (version: string): Promise<UpdateAsset[]> =>
+  invoke("get_update_assets", { version });
+
+export const downloadAndRunUpdate = (url: string, filename: string): Promise<void> =>
+  invoke("download_and_run_update", { url, filename });

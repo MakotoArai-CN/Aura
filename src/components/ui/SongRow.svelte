@@ -4,10 +4,15 @@
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
   import { localmusic } from "../../lib/providers/localmusic";
   import { proxyResourceUrl } from "../../lib/resourceUrl";
-  import { downloadTrackFile, type DownloadMetadata } from "../../lib/tauri";
+  import { downloadTrackFile, openExternalUrl, type DownloadMetadata } from "../../lib/tauri";
   import { toast } from "../../lib/stores/toast";
   import { runOnActionKey } from "../../lib/keyboard";
   import type { Track } from "../../lib/stores/player";
+
+  function openSource(url?: string) {
+    if (!url) return;
+    void openExternalUrl(url);
+  }
 
   let { track, index, onPlay, showRemove = false, showSourceBadge = false, onRemove }: {
     track: Track; index?: number; onPlay: () => void;
@@ -190,8 +195,8 @@
       </span>
     {/if}
     {#if track.source_url}
-      <span class="icon" onclick={(e) => { e.stopPropagation(); window.open(track.source_url, "_blank"); }}
-        role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => window.open(track.source_url, "_blank"))} title="在来源打开">
+      <span class="icon" onclick={(e) => { e.stopPropagation(); openSource(track.source_url); }}
+        role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => openSource(track.source_url))} title="在来源打开">
         <svg width="16" height="16" viewBox="0 0 24 24">
           <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
           <polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/>
@@ -240,8 +245,8 @@
     {/if}
     {#if track.source_url}
       <div class="menu-sep"></div>
-      <div class="menu-item" onclick={() => { window.open(track.source_url, "_blank"); showMenu = false; }}
-        role="menuitem" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => { window.open(track.source_url, "_blank"); showMenu = false; })}>在来源打开</div>
+      <div class="menu-item" onclick={() => { openSource(track.source_url); showMenu = false; }}
+        role="menuitem" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => { openSource(track.source_url); showMenu = false; })}>在来源打开</div>
     {/if}
   </div>
 {/if}

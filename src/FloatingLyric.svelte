@@ -185,15 +185,15 @@
   }
 
   function onMouseLeave() {
-    // 锁定时工具栏常显（用于解锁），不因 leave 隐藏
-    if (!locked) showToolbar = false;
+    // 锁定后工具栏整体隐藏；未锁定时鼠标离开也隐藏
+    showToolbar = false;
   }
 
   function toggleLock() {
     // 乐观更新本地 locked，主窗 patch 后经 settings 回流校正。
+    // 锁定后工具栏整体隐藏，无需再强制置 showToolbar=true。
     const nextLocked = !locked;
     lyricWindow = { ...lyricWindow, locked: nextLocked };
-    showToolbar = true;
     void emitTo("main", "float-lyric-lock-changed", { locked: nextLocked }).catch(() => undefined);
   }
 
@@ -310,8 +310,8 @@
   let toolbarColor = $derived(toolbarTextColor(lyricWindow.colorScheme, lyricWindow.color));
   let toolbarButtonBg = $derived(toolbarButtonBackground(lyricWindow.colorScheme, lyricWindow.color));
   let toolbarBackgroundAlpha = $derived(Math.min(0.72, Math.max(0.26, lyricWindow.backgroundAlpha + 0.16)));
-  // 锁定时工具栏常显，保证解锁按钮始终可点
-  let toolbarVisible = $derived(locked || showToolbar);
+  // 锁定后工具栏整体隐藏（解锁与关闭按钮同样藏起）；解锁需从主窗设置里操作。
+  let toolbarVisible = $derived(!locked && showToolbar);
 
   $effect(() => {
     if (Math.abs(floatHeight - lastFloatHeight) < 2) return;
@@ -331,29 +331,25 @@
   role="region"
   aria-label="浮动歌词"
 >
-  <div class="toolbar safe-toolbar" class:visible={toolbarVisible} class:locked-toolbar={locked}>
-    {#if !locked}
+  {#if !locked}
+    <div class="toolbar safe-toolbar" class:visible={toolbarVisible}>
       <button class="tb-btn variant-btn" class:active={variantActive} disabled={!hasTranslation && !hasPhonetic} onclick={toggleVariantMode} title={variantButtonTitle()}>{variantButtonLabel()}</button>
       <button class="tb-btn" onclick={() => patchLyricWindow({ fontSize: Math.max(14, lyricWindow.fontSize - 2) })} title="缩小字体">A-</button>
       <button class="tb-btn" onclick={() => patchLyricWindow({ fontSize: Math.min(60, lyricWindow.fontSize + 2) })} title="放大字体">A+</button>
       <button class="tb-btn" onclick={() => patchLyricWindow({ backgroundAlpha: Math.max(0, lyricWindow.backgroundAlpha - 0.1) })} title="降低背景">◐-</button>
       <button class="tb-btn" onclick={() => patchLyricWindow({ backgroundAlpha: Math.min(1, lyricWindow.backgroundAlpha + 0.1) })} title="提高背景">◐+</button>
-    {/if}
-    <button class="tb-btn" type="button" onclick={toggleLock} title={locked ? "解锁" : "锁定"}>
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        {#if locked}
-          <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-        {:else}
+      <button class="tb-btn" type="button" onclick={toggleLock} title="锁定">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>
-        {/if}
-      </svg>
-    </button>
-    <button class="tb-btn" type="button" onclick={closeFloatWindow} title="关闭桌面歌词">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M18 6 6 18M6 6l12 12"/>
-      </svg>
-    </button>
-  </div>
+        </svg>
+      </button>
+      <button class="tb-btn" type="button" onclick={closeFloatWindow} title="关闭桌面歌词">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+  {/if}
 
   <div
     class="lyric-content"
@@ -429,11 +425,6 @@
   }
 
   .safe-toolbar.visible {
-    opacity: 1;
-    pointer-events: auto;
-  }
-
-  .safe-toolbar.locked-toolbar {
     opacity: 1;
     pointer-events: auto;
   }

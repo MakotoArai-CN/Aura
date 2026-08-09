@@ -3,6 +3,7 @@ mod download;
 mod local_music;
 mod proxy;
 mod system_stats;
+mod update;
 mod window;
 
 use tauri::Manager;
@@ -131,6 +132,8 @@ pub fn run() {
             cache::get_cache_stats,
             cache::clear_audio_cache,
             system_stats::get_resource_usage,
+            update::download_and_run_update,
+            update::get_update_assets,
         ]);
 
     #[cfg(all(debug_assertions, desktop))]

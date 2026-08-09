@@ -29,7 +29,29 @@ function lsGet<T>(key: string): T | null {
 }
 
 function lsSet(key: string, value: unknown) {
-  localStorage.setItem(key, JSON.stringify(value));
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name ?? "";
+    if (name === "QuotaExceededError" || name === "NS_ERROR_DOM_QUOTA_REACHED") {
+      throw new Error("本地存储空间已满，请减少扫描的曲目数量或清理已导入的本地音乐后重试。");
+    }
+    throw err;
+  }
+}
+
+// Base64-encoded cover art can easily exceed localStorage quotas when many
+// tracks are scanned. We keep the cover on disk (read on demand) and only
+// persist a lightweight marker so playlists still render an artwork placeholder.
+function stripHeavyFields<T extends LocalTrack>(track: T): T {
+  const cover = track.img_url ?? "";
+  const lyric = track.lyric ?? "";
+  const next: T = { ...track };
+  if (cover.startsWith("data:")) next.img_url = "";
+  // Embedded lyrics can also be sizeable; drop them from persistent storage
+  // and rely on on-demand reads via `lyric()` when the user plays the track.
+  if (lyric.length > 2000) next.lyric = "";
+  return next;
 }
 
 function filenameFromPath(filePath: string): string {
@@ -96,15 +118,16 @@ async function persistLocalTracks(tracks: Track[]) {
   let added = 0;
   let updated = 0;
   for (const track of tracks) {
-    const idx = existingIndex.get(track.id);
+    const slim = stripHeavyFields(track as LocalTrack);
+    const idx = existingIndex.get(slim.id);
     if (idx == null) {
-      existingIndex.set(track.id, existing.tracks.length);
-      existing.tracks.push(track);
+      existingIndex.set(slim.id, existing.tracks.length);
+      existing.tracks.push(slim);
       added++;
     } else {
       existing.tracks[idx] = {
         ...existing.tracks[idx],
-        ...track,
+        ...slim,
         disabled: false,
       };
       updated++;

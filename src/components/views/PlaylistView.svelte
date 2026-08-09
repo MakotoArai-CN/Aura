@@ -7,8 +7,14 @@
   import SongRow from "../ui/SongRow.svelte";
   import { runOnActionKey } from "../../lib/keyboard";
   import { infiniteScroll } from "../../lib/infiniteScroll";
+  import { openExternalUrl } from "../../lib/tauri";
   import type { Playlist } from "../../lib/providers/types";
   import type { Track } from "../../lib/stores/player";
+
+  function openSource(url?: string) {
+    if (!url) return;
+    void openExternalUrl(url);
+  }
 
   let { navigate, listId }: { navigate: (v: unknown) => void; listId: string } = $props();
 
@@ -242,7 +248,13 @@
             {/if}
 
             {#if playlist.info.source_url}
-              <a class="playlist-button" href={playlist.info.source_url} target="_blank">
+              <div
+                class="playlist-button"
+                role="button"
+                tabindex="0"
+                onclick={() => openSource(playlist?.info.source_url)}
+                onkeydown={(e) => runOnActionKey(e, () => openSource(playlist?.info.source_url))}
+              >
                 <div class="play-list">
                   <svg width="16" height="16" viewBox="0 0 24 24" style="flex:0 0 16px;margin-right:8px">
                     <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
@@ -250,7 +262,7 @@
                   </svg>
                   来源
                 </div>
-              </a>
+              </div>
             {/if}
           </div>
         </div>
