@@ -1,7 +1,7 @@
 <script lang="ts">
   import { MediaService } from "../../lib/providers/index";
   import { player } from "../../lib/player";
-  import { proxyResourceUrl } from "../../lib/resourceUrl";
+  import { sizedImageUrl } from "../../lib/resourceUrl";
   import SongRow from "../ui/SongRow.svelte";
   import type { Track } from "../../lib/stores/player";
   import { toast } from "../../lib/stores/toast";
@@ -139,7 +139,7 @@
       <!-- Playlist grid (same as discover) -->
       <ul class="playlist-covers isSearch">
         {#each results as item, i (`${item.id}-${i}`)}
-          {@const coverUrl = proxyResourceUrl(item.img_url)}
+          {@const coverUrl = sizedImageUrl(item.img_url, 100)}
           <li>
             <div class="u-cover" onclick={() => navigate({ type: "playlist", id: item.id })}
               role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => navigate({ type: "playlist", id: item.id }))}>

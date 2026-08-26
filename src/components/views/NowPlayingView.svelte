@@ -2,7 +2,7 @@
   import { playerState, playbackClock } from "../../lib/stores/player";
   import { MediaService } from "../../lib/providers/index";
   import { settings } from "../../lib/stores/settings";
-  import { cssImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
+  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import { getActiveLyricPayload, getLineVariant, getLyricsVariantAvailability, getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, parseLyric, type LyricLine, type LyricVariantMode } from "../../lib/lyrics";
   import { runOnActionKey } from "../../lib/keyboard";
   import { tick } from "svelte";
@@ -127,7 +127,8 @@
   });
 
   let rawBgUrl = $derived($playerState.currentTrack?.img_url ?? "");
-  let bgUrl = $derived(proxyResourceUrl(rawBgUrl));
+  let bgUrl = $derived(sizedImageUrl(rawBgUrl, 500));
+  let bgBlurUrl = $derived(sizedImageUrl(rawBgUrl, 200));
 
   function nextVariantMode(): LyricVariantMode {
     return getNextLyricVariantMode(variantMode, lyricAvailability);
@@ -172,7 +173,7 @@
 
   {#if bgUrl && $settings.enableNowplayingCoverBackground}
     <div class="bgwrapper">
-      <div class="bg" style:background-image={cssImageUrl(rawBgUrl)}></div>
+      <div class="bg" style:background-image={cssImageUrl(bgBlurUrl)}></div>
     </div>
   {/if}
 
@@ -189,7 +190,7 @@
       <div>
         <div class="detail-head-cover">
           {#if bgUrl}
-            <div class="covershadow" style:background-image={cssImageUrl(rawBgUrl)}></div>
+            <div class="covershadow" style:background-image={cssImageUrl(bgBlurUrl)}></div>
             <img src={bgUrl} alt="cover" />
           {:else}
             <div class="empty-cover">

@@ -3,7 +3,7 @@
   import { settings } from "../../lib/stores/settings";
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
   import { localmusic } from "../../lib/providers/localmusic";
-  import { proxyResourceUrl } from "../../lib/resourceUrl";
+  import { sizedImageUrl } from "../../lib/resourceUrl";
   import { downloadTrackFile, openExternalUrl, type DownloadMetadata } from "../../lib/tauri";
   import { toast } from "../../lib/stores/toast";
   import { runOnActionKey } from "../../lib/keyboard";
@@ -32,7 +32,7 @@
   let isUnavailable = $derived(Boolean(track.disabled));
   let isLocalTrack = $derived(track.source === "localmusic" || track.id.startsWith("lmtrack_"));
   let canDownload = $derived(!isLocalTrack);
-  let thumbUrl = $derived(proxyResourceUrl(track.img_url));
+  let thumbUrl = $derived(sizedImageUrl(track.img_url, 100));
 
   function openMenu(e: MouseEvent) {
     e.preventDefault(); e.stopPropagation();

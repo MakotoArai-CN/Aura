@@ -2,7 +2,7 @@
   import { playerState, progressPercent, positionFormatted, durationFormatted } from "../../lib/stores/player";
   import { player } from "../../lib/player";
   import { settings } from "../../lib/stores/settings";
-  import { cssImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
+  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
   import { extractAccentPair, type Rgb } from "../../lib/coverAccent";
   import NowPlayingView from "../views/NowPlayingView.svelte";
@@ -32,8 +32,8 @@
   let dragPercent = $state(0);
   let showQueue = $state(false);
   let isNowPlaying = $derived(activeView.type === "nowplaying");
-  let currentCoverUrl = $derived(proxyResourceUrl($playerState.currentTrack?.img_url));
-  let coverBackground = $derived(cssImageUrl($playerState.currentTrack?.img_url));
+  let currentCoverUrl = $derived(sizedImageUrl($playerState.currentTrack?.img_url, 200));
+  let coverBackground = $derived(cssImageUrl(sizedImageUrl($playerState.currentTrack?.img_url, 200)));
   // 从封面动态提取主/副色，注入 CSS 变量做多色渐变（取色失败保留 app.css 的静态默认）。
   let accentPrimary = $state<Rgb | null>(null);
   let accentSecondary = $state<Rgb | null>(null);

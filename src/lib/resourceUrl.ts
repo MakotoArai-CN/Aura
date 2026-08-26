@@ -54,6 +54,24 @@ export function proxyResourceUrl(url?: string | null): string {
   return normalized;
 }
 
+/**
+ * 按显示尺寸请求缩放后的封面，避免整张原始专辑图解码进显存
+ * （3000px 原图解码后位图可达数十 MB）。支持网易云 / B站两种参数格式，
+ * 其余平台原样返回。
+ */
+export function sizedImageUrl(url: string | null | undefined, size: number): string {
+  const proxied = proxyResourceUrl(url);
+  if (!proxied || !Number.isFinite(size) || size <= 0) return proxied;
+  if (/^https?:\/\/[^/]*music\.163\.com\//i.test(proxied)) {
+    return `${proxied}?param=${size}y${size}`;
+  }
+  // B站封面：...jpg@200w_200h.jpg（保留扩展名后缀）
+  if (/^https?:\/\/[^/]*hdslb\.com\/.*(jpg|png|webp|jpeg)$/i.test(proxied)) {
+    return `${proxied}@${size}w_${size}h.${proxied.split(".").pop()?.toLowerCase() ?? "jpg"}`;
+  }
+  return proxied;
+}
+
 export function cssImageUrl(url?: string | null): string {
   const proxied = proxyResourceUrl(url);
   if (!proxied) return "";

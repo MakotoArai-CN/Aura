@@ -3,7 +3,7 @@
   import { MediaService } from "../../lib/providers/index";
   import { localmusic } from "../../lib/providers/localmusic";
   import { player } from "../../lib/player";
-  import { cssImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
+  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import SongRow from "../ui/SongRow.svelte";
   import { runOnActionKey } from "../../lib/keyboard";
   import { infiniteScroll } from "../../lib/infiniteScroll";
@@ -28,7 +28,7 @@
   let editTitle = $state("");
   let editCover = $state("");
   let playlistQuery = $state("");
-  let playlistCoverUrl = $derived(proxyResourceUrl(playlist?.info.cover_img_url));
+  let playlistCoverUrl = $derived(sizedImageUrl(playlist?.info.cover_img_url, 300));
   const RENDER_STEP = 80;
   let renderLimit = $state(RENDER_STEP);
   let filteredTracks = $derived.by(() => {

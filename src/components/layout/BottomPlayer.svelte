@@ -3,7 +3,7 @@
   import { player } from "../../lib/player";
   import { settings } from "../../lib/stores/settings";
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
-  import { proxyResourceUrl } from "../../lib/resourceUrl";
+  import { sizedImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
   import { toast } from "../../lib/stores/toast";
   import { openExternalUrl } from "../../lib/tauri";
@@ -50,7 +50,7 @@
   let currentLyricVariantActive = $derived(isLyricVariantModeActive(currentLyricVariantMode, currentLyricAvailability));
   let lastCoverIndex = -1;
   let lastCoverTrackId = "";
-  let currentCoverUrl = $derived(proxyResourceUrl($playerState.currentTrack?.img_url));
+  let currentCoverUrl = $derived(sizedImageUrl($playerState.currentTrack?.img_url, 200));
   let coverAccentStyle = $derived.by(() => {
     if (!$settings.enableCoverAdaptiveTheme || !adaptiveAccent) return "";
     const { r, g, b } = adaptiveAccent;
@@ -63,17 +63,21 @@
     Boolean($playerState.currentTrack) &&
     !$playerState.playing
   );
+  // 相邻封面仅在切换动画的 240ms 内挂载，平时不驻留解码位图。
+  let showAdjacentCovers = $state(false);
   let prevCoverUrl = $derived.by(() => {
+    if (!showAdjacentCovers) return "";
     const list = $playerState.playlist;
     const index = $playerState.currentIndex;
     if (!list.length || index < 0) return "";
-    return proxyResourceUrl(list[(index - 1 + list.length) % list.length]?.img_url);
+    return sizedImageUrl(list[(index - 1 + list.length) % list.length]?.img_url, 200);
   });
   let nextCoverUrl = $derived.by(() => {
+    if (!showAdjacentCovers) return "";
     const list = $playerState.playlist;
     const index = $playerState.currentIndex;
     if (!list.length || index < 0) return "";
-    return proxyResourceUrl(list[(index + 1) % list.length]?.img_url);
+    return sizedImageUrl(list[(index + 1) % list.length]?.img_url, 200);
   });
   let displayedProgress = $derived(isDragging ? dragPercent : $progressPercent);
 
@@ -433,15 +437,18 @@
       return index === expectedPrev ? "prev" : "next";
     })();
     coverSwitchDirection = "";
+    showAdjacentCovers = true;
     const frame = window.requestAnimationFrame(() => {
       coverSwitchDirection = direction;
     });
     const timer = window.setTimeout(() => {
       coverSwitchDirection = "";
+      showAdjacentCovers = false;
     }, 240);
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
+      showAdjacentCovers = false;
     };
   });
 </script>
@@ -873,9 +880,9 @@
     display: flex;
     flex: 1;
     transition: 0.5s;
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
-    background-color: var(--nav-background-color);
+    /* 常驻 backdrop-filter 会迫使合成器为整个底栏维持离屏中间纹理；
+       半透明底色近似毛玻璃观感，显存开销大幅降低 */
+    background-color: color-mix(in srgb, var(--nav-background-color) 88%, transparent);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 0 16px rgb(0 0 0 / 10%);
     border-top: solid 1px var(--line-default-color);
@@ -955,8 +962,6 @@
       linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.10) 22%, rgba(0, 0, 0, 0.16)),
       var(--nav-background-color);
     border-top: 1px solid var(--line-default-color);
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
   }
 
   .footer.expanded.adaptive .footerwrap {

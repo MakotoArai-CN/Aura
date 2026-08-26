@@ -1,6 +1,6 @@
 <script lang="ts">
   import { MediaService } from "../../lib/providers/index";
-  import { cssImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
+  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
   import { infiniteScroll } from "../../lib/infiniteScroll";
   import type { PlaylistFilter, PlaylistInfo } from "../../lib/providers/types";
@@ -119,7 +119,7 @@
   <!-- Grid -->
   <ul class="playlist-covers">
     {#each playlists as pl, i (`${pl.id}-${i}`)}
-      {@const coverUrl = proxyResourceUrl(pl.cover_img_url)}
+      {@const coverUrl = sizedImageUrl(pl.cover_img_url, 150)}
       <li>
         <div class="u-cover" onclick={() => navigate({ type: "playlist", id: pl.id })}
           role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => navigate({ type: "playlist", id: pl.id }))}>
