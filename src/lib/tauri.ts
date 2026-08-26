@@ -328,6 +328,11 @@ export const clearAudioCache = () =>
 export const getResourceUsage = (): Promise<ResourceUsage> =>
   invoke("get_resource_usage");
 
+export type DeviceTier = "high" | "mid" | "low";
+
+export const getDeviceTier = (): Promise<DeviceTier> =>
+  invoke<DeviceTier>("get_device_tier");
+
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!isTauriRuntime()) return;
   if (enabled) await enableAutostartPlugin();

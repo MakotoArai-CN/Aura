@@ -26,6 +26,7 @@
     showFloatWindow,
   } from "./lib/tauri";
   import { settings, type AppSettings } from "./lib/stores/settings";
+  import { deviceTier, initDeviceTier } from "./lib/stores/device";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "./lib/shortcuts";
   import { bindPlayerKeyboard } from "./lib/keyboard";
   import { localmusic } from "./lib/providers/localmusic";
@@ -108,6 +109,8 @@
   });
 
   onMount(() => {
+    void initDeviceTier();
+
     let unlisten: (() => void) | null = null;
     let disposed = false;
 
@@ -211,6 +214,7 @@
 <div
   class="wrap"
   data-theme={$settings.theme === "white2" ? "light" : $settings.theme === "liquidGlass" ? "liquid-glass" : "dark"}
+  data-visual={$deviceTier}
   data-immersive-player={immersivePlayerActive}
 >
   <div class="body-bg">

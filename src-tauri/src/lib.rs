@@ -1,4 +1,5 @@
 mod cache;
+mod device_tier;
 mod download;
 mod local_music;
 mod proxy;
@@ -19,6 +20,19 @@ pub fn run() {
     };
     #[cfg(debug_assertions)]
     eprintln!("[listen1] starting app, stream_base_url={stream_base_url}");
+
+    // 设备分级决定 WebView2 渲染策略：仅高性能 CPU + 独显启用 GPU 加速，
+    // 其余走软件渲染（省显存/内存，UI 场景足够）。必须在首个 WebView 创建前设置。
+    #[cfg(debug_assertions)]
+    eprintln!("[listen1] device_tier={:?}", device_tier::detect());
+
+    #[cfg(windows)]
+    if !device_tier::should_enable_gpu_acceleration() {
+        std::env::set_var(
+            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess --disable-gpu --disable-gpu-compositing",
+        );
+    }
 
     let builder = tauri::Builder::default()
         .plugin(stream_base_url_plugin(&stream_base_url))
@@ -141,6 +155,7 @@ pub fn run() {
             cache::get_cache_stats,
             cache::clear_audio_cache,
             system_stats::get_resource_usage,
+            device_tier::get_device_tier,
             update::download_and_run_update,
             update::get_update_assets,
         ]);

@@ -3,6 +3,7 @@
   import { MediaService } from "../../lib/providers/index";
   import { settings } from "../../lib/stores/settings";
   import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
+  import { deviceTier } from "../../lib/stores/device";
   import { getActiveLyricPayload, getLineVariant, getLyricsVariantAvailability, getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, parseLyric, type LyricLine, type LyricVariantMode } from "../../lib/lyrics";
   import { runOnActionKey } from "../../lib/keyboard";
   import { tick } from "svelte";
@@ -171,7 +172,7 @@
 >
   <div class="draggable-zone"></div>
 
-  {#if bgUrl && $settings.enableNowplayingCoverBackground}
+  {#if bgUrl && $settings.enableNowplayingCoverBackground && $deviceTier !== "low"}
     <div class="bgwrapper">
       <div class="bg" style:background-image={cssImageUrl(bgBlurUrl)}></div>
     </div>
@@ -316,7 +317,8 @@
   .bg {
     opacity: 0.6;
     width: 100%; height: 100%;
-    filter: blur(72px) contrast(82%) brightness(132%);
+    /* 视觉档位变量：high=72px 完整模糊；mid=48px 轻量；low=无（不渲染该层） */
+    filter: var(--visual-cover-bg-filter);
     background-repeat: no-repeat;
     background-position: center;
     background-size: cover;
@@ -374,7 +376,7 @@
     top: 12px;
     height: 100%;
     width: 100%;
-    filter: blur(16px) opacity(0.6);
+    filter: var(--visual-cover-shadow-filter);
     transform: scale(0.92, 0.96);
     z-index: -1;
     background-size: cover;

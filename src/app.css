@@ -353,6 +353,29 @@
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+
+  /* ─── 设备分级视觉变量（由 App.svelte 挂载时按 Rust 检测结果设置 data-visual）───
+     mid（高性能 CPU 无独显，软件渲染）与 low（中低端 CPU，纯色 UI）默认禁用
+     常驻模糊合成；high（高性能 CPU + 独显）恢复完整毛玻璃与模糊背景。 */
+  --visual-backdrop: none;
+  --visual-cover-bg-filter: none;
+  --visual-cover-shadow-filter: none;
+  --footer-surface-alpha: 88%;
+}
+
+.wrap[data-visual="high"] {
+  --visual-backdrop: saturate(180%) blur(20px);
+  --visual-cover-bg-filter: blur(72px) contrast(82%) brightness(132%);
+  --visual-cover-shadow-filter: blur(16px) opacity(0.6);
+}
+
+.wrap[data-visual="mid"] {
+  --visual-cover-bg-filter: blur(48px) contrast(82%) brightness(132%);
+  --visual-cover-shadow-filter: blur(10px) opacity(0.5);
+}
+
+.wrap[data-visual="low"] {
+  --footer-surface-alpha: 100%;
 }
 
 html, body { height: 100%; width: 100%; overflow: hidden; background: transparent; }

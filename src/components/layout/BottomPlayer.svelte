@@ -2,6 +2,7 @@
   import { playerState, progressPercent, positionFormatted, durationFormatted } from "../../lib/stores/player";
   import { player } from "../../lib/player";
   import { settings } from "../../lib/stores/settings";
+  import { deviceTier } from "../../lib/stores/device";
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
   import { sizedImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
@@ -58,6 +59,7 @@
   });
   let footerMainEl = $state<HTMLElement | null>(null);
   let glassSurfaceEnabled = $derived(
+    $deviceTier === "high" &&
     $settings.theme === "liquidGlass" &&
     !isNowPlaying &&
     Boolean($playerState.currentTrack) &&
@@ -887,9 +889,11 @@
     display: flex;
     flex: 1;
     transition: 0.5s;
-    /* 常驻 backdrop-filter 会迫使合成器为整个底栏维持离屏中间纹理；
-       半透明底色近似毛玻璃观感，显存开销大幅降低 */
-    background-color: color-mix(in srgb, var(--nav-background-color) 88%, transparent);
+    /* 视觉档位变量（app.css 按 data-visual 定义）：
+       high=毛玻璃恢复最佳效果；mid/low=半透明底色省掉常驻模糊合成 */
+    -webkit-backdrop-filter: var(--visual-backdrop);
+    backdrop-filter: var(--visual-backdrop);
+    background-color: color-mix(in srgb, var(--nav-background-color) var(--footer-surface-alpha), transparent);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 0 16px rgb(0 0 0 / 10%);
     border-top: solid 1px var(--line-default-color);
@@ -969,6 +973,8 @@
       linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.10) 22%, rgba(0, 0, 0, 0.16)),
       var(--nav-background-color);
     border-top: 1px solid var(--line-default-color);
+    -webkit-backdrop-filter: var(--visual-backdrop);
+    backdrop-filter: var(--visual-backdrop);
   }
 
   .footer.expanded.adaptive .footerwrap {
@@ -1664,8 +1670,8 @@
     transition: all 0.3s;
     overflow: hidden;
     width: 530px;
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: var(--visual-backdrop);
+    backdrop-filter: var(--visual-backdrop);
     background:
       linear-gradient(180deg, rgba(255,255,255,0.04), transparent 42%),
       var(--nav-background-color);
@@ -1862,8 +1868,8 @@
     background:
       linear-gradient(180deg, rgba(255,255,255,0.05), transparent 42%),
       var(--nav-background-color);
-    -webkit-backdrop-filter: saturate(180%) blur(20px);
-    backdrop-filter: saturate(180%) blur(20px);
+    -webkit-backdrop-filter: var(--visual-backdrop);
+    backdrop-filter: var(--visual-backdrop);
     box-shadow: 0 24px 54px rgba(0, 0, 0, 0.22);
     padding: 10px;
     color: var(--text-default-color);

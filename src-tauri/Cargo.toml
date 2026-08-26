@@ -36,6 +36,9 @@ tauri-plugin-mcp-bridge = "0.10"
 tauri-plugin-autostart = "2"
 tauri-plugin-global-shortcut = "2"
 
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

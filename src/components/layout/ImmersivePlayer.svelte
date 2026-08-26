@@ -503,8 +503,8 @@
     box-shadow:
       var(--immersive-player-panel-shadow),
       0 20px 60px rgba(0, 0, 0, 0.36);
-    -webkit-backdrop-filter: saturate(150%) blur(18px);
-    backdrop-filter: saturate(150%) blur(18px);
+    -webkit-backdrop-filter: var(--visual-backdrop);
+    backdrop-filter: var(--visual-backdrop);
     transition:
       border-radius 900ms cubic-bezier(0.16, 1, 0.3, 1),
       background 900ms cubic-bezier(0.16, 1, 0.3, 1),
@@ -974,8 +974,8 @@
       radial-gradient(circle at 24% 0%, rgba(var(--immersive-player-accent-rgb), 0.12), transparent 38%),
       rgba(11, 13, 18, 0.9);
     box-shadow: 0 24px 80px rgba(0,0,0,0.44), var(--immersive-player-panel-shadow);
-    -webkit-backdrop-filter: saturate(150%) blur(22px);
-    backdrop-filter: saturate(150%) blur(22px);
+    -webkit-backdrop-filter: var(--visual-backdrop);
+    backdrop-filter: var(--visual-backdrop);
   }
 
   .queue-panel header {

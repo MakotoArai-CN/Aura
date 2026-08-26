@@ -635,8 +635,8 @@
       background: var(--nav-background-color);
       border: 1px solid var(--line-default-color);
       box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22);
-      -webkit-backdrop-filter: saturate(180%) blur(18px);
-      backdrop-filter: saturate(180%) blur(18px);
+      -webkit-backdrop-filter: var(--visual-backdrop);
+      backdrop-filter: var(--visual-backdrop);
     }
 
     .logo-content,
