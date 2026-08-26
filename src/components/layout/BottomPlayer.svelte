@@ -65,6 +65,11 @@
   );
   // 相邻封面仅在切换动画的 240ms 内挂载，平时不驻留解码位图。
   let showAdjacentCovers = $state(false);
+  // 播放页首次打开前不挂载（隐藏的完整歌词 DOM 常驻内存无意义），打开过一次后保持挂载以保留滑出动画。
+  let nowPlayingEverOpened = $state(false);
+  $effect(() => {
+    if (nowPlayingOpen) nowPlayingEverOpened = true;
+  });
   let prevCoverUrl = $derived.by(() => {
     if (!showAdjacentCovers) return "";
     const list = $playerState.playlist;
@@ -467,7 +472,9 @@
       variant="liquid"
       backgroundSelector="#listen1-glass-scene"
     />
-    <NowPlayingView visible={nowPlayingOpen} onClose={onCloseNowPlaying} />
+    {#if nowPlayingEverOpened}
+      <NowPlayingView visible={nowPlayingOpen} onClose={onCloseNowPlaying} />
+    {/if}
 
     <div class="footerwrap" class:switch-next={coverSwitchDirection === "next"} class:switch-prev={coverSwitchDirection === "prev"}>
       <div class="left-control" class:slidedown={isNowPlaying}>

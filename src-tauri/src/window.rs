@@ -170,7 +170,7 @@ pub fn open_login_window(app: AppHandle, url: String) -> Result<(), String> {
                 .minimizable(true)
                 .center()
                 .visible(false)
-                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu")
+                .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess --disable-gpu --disable-gpu-compositing")
                 .build()
                 .map_err(|e| e.to_string())?
         }
@@ -387,7 +387,7 @@ pub fn show_float_window(
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(true)
-        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-gpu")
+        .additional_browser_args("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess --disable-gpu --disable-gpu-compositing")
         .build()
         .map_err(|e| e.to_string())?;
     }
