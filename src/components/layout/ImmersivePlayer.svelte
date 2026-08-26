@@ -381,9 +381,8 @@
               aria-valuenow={displayedProgress}
             >
               <div class="rail">
-                <div class="fill" style:width={`${displayedProgress}%`}>
-                  <span></span>
-                </div>
+                <div class="fill" style:clip-path={`inset(0 ${100 - displayedProgress}% 0 0)`}></div>
+                <span class="knob" style:left={`${displayedProgress}%`}></span>
               </div>
             </div>
 
@@ -407,9 +406,8 @@
                 aria-valuenow={displayedVolume}
               >
                 <div class="rail">
-                  <div class="fill" style:width={`${displayedVolume}%`}>
-                    <span></span>
-                  </div>
+                  <div class="fill" style:clip-path={`inset(0 ${100 - displayedVolume}% 0 0)`}></div>
+                  <span class="knob" style:left={`${displayedVolume}%`}></span>
                 </div>
               </div>
             </div>
@@ -896,29 +894,33 @@
   }
 
   .fill {
-    position: relative;
+    position: absolute;
+    inset: 0;
     height: 100%;
+    width: 100%;
     border-radius: inherit;
     background: linear-gradient(90deg, var(--immersive-player-accent2, #ffffff), var(--immersive-player-accent));
+    /* clip-path 替代 width：进度更新零布局开销 */
+    will-change: clip-path;
   }
 
-  .fill span {
+  .rail .knob {
     position: absolute;
     top: 50%;
-    right: -5px;
     width: 10px;
     height: 10px;
     border-radius: 50%;
     background: #ffffff;
     box-shadow: 0 0 0 4px rgba(var(--immersive-player-accent-rgb), 0.18);
-    transform: translateY(-50%) scale(0.72);
+    transform: translate(-50%, -50%) scale(0.72);
     opacity: 0.72;
     transition: transform 160ms ease, opacity 160ms ease;
+    pointer-events: none;
   }
 
-  .scrubber:hover .fill span,
-  .scrubber:focus .fill span {
-    transform: translateY(-50%) scale(1);
+  .scrubber:hover .rail .knob,
+  .scrubber:focus .rail .knob {
+    transform: translate(-50%, -50%) scale(1);
     opacity: 1;
   }
 
@@ -1108,9 +1110,12 @@
 
   .queue-spectrum span {
     width: 4px;
-    height: 35%;
+    height: 100%;
     border-radius: 99px 99px 0 0;
     background: linear-gradient(180deg, rgba(255,255,255,0.92), var(--immersive-player-accent));
+    /* scaleY 替代 height：动画走合成器，不触发布局 */
+    transform-origin: bottom;
+    transform: scaleY(0.35);
   }
 
   .queue-spectrum.active span {
@@ -1125,8 +1130,8 @@
   }
 
   @keyframes queueSpectrum {
-    0%, 100% { height: 25%; }
-    50% { height: 100%; }
+    0%, 100% { transform: scaleY(0.25); }
+    50% { transform: scaleY(1); }
   }
 
   @keyframes spin {

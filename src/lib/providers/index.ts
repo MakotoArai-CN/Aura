@@ -211,6 +211,11 @@ function getDefaultPlaylistFilterId(source: ProviderName): string {
   return group?.items?.[0]?.id ?? "";
 }
 
+/** 歌单增删改后广播，Sidebar 等订阅方事件化刷新，取代每秒轮询。 */
+function notifyPlaylistsChanged() {
+  window.dispatchEvent(new CustomEvent("listen1-my-playlists-changed"));
+}
+
 // My playlist management (localStorage-backed, key-compatible with original)
 const myplaylistLib = {
   guid(): string {
@@ -236,6 +241,7 @@ const myplaylistLib = {
     const ids: string[] = lsGet(key) ?? [];
     ids.push(id);
     lsSet(key, ids);
+    notifyPlaylistsChanged();
     return id;
   },
   edit(id: string, title: string, coverImgUrl: string) {
@@ -250,6 +256,7 @@ const myplaylistLib = {
     const ids = (lsGet<string[]>(key) ?? []).filter((i) => i !== id);
     lsSet(key, ids);
     if (type === "my") localStorage.removeItem(id);
+    notifyPlaylistsChanged();
   },
   addTrack(id: string, track: Track): Playlist | null {
     const pl = lsGet<Playlist>(id);
@@ -285,6 +292,7 @@ const myplaylistLib = {
     const ids: string[] = lsGet(key) ?? [];
     ids.push(id);
     lsSet(key, ids);
+    notifyPlaylistsChanged();
     return id;
   },
   merge(srcId: string, targetId: string) {

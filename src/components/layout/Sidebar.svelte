@@ -23,11 +23,26 @@
   let importingPlaylist = $state(false);
 
   $effect(() => {
-    const id = setInterval(() => {
-      myPls = myplaylistLib.show("my");
-      favPls = myplaylistLib.show("favorite");
-    }, 1000);
-    return () => clearInterval(id);
+    // 事件驱动刷新：歌单增删改时由 myplaylistLib 广播，取代每秒轮询。
+    let lastSig = "";
+    const refresh = () => {
+      const my = myplaylistLib.show("my");
+      const fav = myplaylistLib.show("favorite");
+      const sig = JSON.stringify([
+        my.map((p) => [p.info.id, p.info.title]),
+        fav.map((p) => [p.info.id, p.info.title]),
+      ]);
+      if (sig === lastSig) return;
+      lastSig = sig;
+      myPls = my;
+      favPls = fav;
+    };
+    window.addEventListener("listen1-my-playlists-changed", refresh);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.removeEventListener("listen1-my-playlists-changed", refresh);
+      window.removeEventListener("focus", refresh);
+    };
   });
 
   function createPlaylist() {

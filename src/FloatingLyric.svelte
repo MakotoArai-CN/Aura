@@ -279,14 +279,29 @@
     }
     isDragging = true;
 
-    const onMove = async (e: MouseEvent) => {
-      await moveFloatWindow(
-        Math.round(windowStartX + e.screenX - mouseStartX),
-        Math.round(windowStartY + e.screenY - mouseStartY)
-      );
+    // rAF 合帧：拖拽期间每个渲染帧最多一次 IPC，替代逐 mousemove 高频跨进程调用。
+    let pendingX: number | null = null;
+    let pendingY: number | null = null;
+    let frameHandle: number | null = null;
+    const flushMove = () => {
+      frameHandle = null;
+      if (pendingX === null || pendingY === null) return;
+      const x = pendingX;
+      const y = pendingY;
+      pendingX = null;
+      pendingY = null;
+      void moveFloatWindow(x, y).catch(() => undefined);
+    };
+    const onMove = (e: MouseEvent) => {
+      pendingX = Math.round(windowStartX + e.screenX - mouseStartX);
+      pendingY = Math.round(windowStartY + e.screenY - mouseStartY);
+      if (frameHandle === null) {
+        frameHandle = requestAnimationFrame(flushMove);
+      }
     };
     const onUp = () => {
       isDragging = false;
+      if (frameHandle !== null) cancelAnimationFrame(frameHandle);
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
     };

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { playerState } from "../lib/stores/player";
+  import { playerState, playbackClock } from "../lib/stores/player";
   import { settings, type AppSettings } from "../lib/stores/settings";
   import { MediaService } from "../lib/providers/index";
   import { getTauriRuntimeDiagnostics, hideFloatWindow, listen, setFloatingLyricPayload, setFloatingLyricSettings, showFloatWindow } from "../lib/tauri";
@@ -54,7 +54,7 @@
   }
 
   function payloadForCurrentPosition(): { key: string; payload: FloatingLyricPayload } {
-    const position = Math.max(0, $playerState.position + (($settings.lyricWindow.offsetMs ?? 0) / 1000));
+    const position = Math.max(0, $playbackClock.position + (($settings.lyricWindow.offsetMs ?? 0) / 1000));
     const availability = lyricAvailability();
     const mode = floatingVariantMode;
     const active = getActiveTwoLineLyricPayload(
@@ -402,7 +402,7 @@
     lyricLines;
     floatingVariantMode;
     floatingTranslationIndex;
-    $playerState.position;
+    $playbackClock.position;
     $settings.lyricWindow.offsetMs;
     syncCurrentLyric();
   });

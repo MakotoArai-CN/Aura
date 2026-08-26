@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { playerState } from "../../lib/stores/player";
+  import { playerState, playbackClock } from "../../lib/stores/player";
   import { MediaService } from "../../lib/providers/index";
   import { settings } from "../../lib/stores/settings";
   import { cssImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
@@ -103,8 +103,10 @@
   });
 
   $effect(() => {
+    // 播放页隐藏时跳过逐 tick 的歌词计算与 DOM 查询。
+    if (!visible) return;
     const offsetSec = ($settings.lyricWindow.offsetMs ?? 0) / 1000;
-    const payload = getActiveLyricPayload(lyricLines, $playerState.position + offsetSec, variantMode, translationIndex);
+    const payload = getActiveLyricPayload(lyricLines, $playbackClock.position + offsetSec, variantMode, translationIndex);
     if (!payload) return;
     const idx = payload.index;
     if (idx !== currentIdx) {
@@ -119,7 +121,7 @@
   $effect(() => {
     visible;
     currentIdx;
-    $playerState.position;
+    $playbackClock.position;
     if (!visible || currentIdx < 0 || Date.now() < lyricUserActiveUntil) return;
     if (!highlightedLyricInView()) scheduleLyricReturn(500);
   });

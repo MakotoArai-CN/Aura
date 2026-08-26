@@ -267,7 +267,13 @@ export function getLineVariantAvailability(line: LyricLine | null | undefined) {
   };
 }
 
+// availability 只依赖 lines 数组内容；parseLyric 每次产生新数组，
+// WeakMap 缓存让重复调用（每 250ms 一次）变为 O(1)。
+const availabilityCache = new WeakMap<LyricLine[], LyricVariantAvailability>();
+
 export function getLyricsVariantAvailability(lines: LyricLine[]) {
+  const cached = availabilityCache.get(lines);
+  if (cached) return cached;
   let hasTranslation = false;
   let hasPhonetic = false;
   let variantCount = 0;
@@ -278,7 +284,9 @@ export function getLyricsVariantAvailability(lines: LyricLine[]) {
     variantCount += availability.variantCount;
     if (hasTranslation && hasPhonetic && variantCount > 0) break;
   }
-  return { hasTranslation, hasPhonetic, variantCount };
+  const result = { hasTranslation, hasPhonetic, variantCount };
+  availabilityCache.set(lines, result);
+  return result;
 }
 
 export function getAvailableLyricVariantModes(availability: LyricVariantAvailability): LyricVariantMode[] {
@@ -342,11 +350,20 @@ export function getLineVariant(line: LyricLine | null | undefined, translationIn
 export function getActiveLyricPayload(lines: LyricLine[], positionSeconds: number, showTranslation: boolean | LyricVariantMode = true, translationIndex = 0) {
   if (!lines.length) return null;
   const posMs = positionSeconds * 1000;
+  // lines 已按 seconds 升序，二分查找替代线性扫描。
+  let lo = 0;
+  let hi = lines.length - 1;
   let idx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (!lines[i]) continue;
-    if (lines[i].seconds <= posMs) idx = i;
-    else break;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const line = lines[mid];
+    if (!line) { hi = mid - 1; continue; }
+    if (line.seconds <= posMs) {
+      idx = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
   }
   const line = idx >= 0 ? lines[idx] : null;
   if (!line || line.translationFlag) return null;

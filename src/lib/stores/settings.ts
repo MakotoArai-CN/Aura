@@ -175,20 +175,33 @@ function loadSettings(): AppSettings {
 
 function createSettingsStore() {
   const { subscribe, set, update } = writable<AppSettings>(loadSettings());
+  let persistTimer: ReturnType<typeof setTimeout> | null = null;
+
+  function persist(next: AppSettings) {
+    if (persistTimer) clearTimeout(persistTimer);
+    // 防抖合并连续 patch（如音量拖动、歌词偏移连点），避免每次交互全量 stringify。
+    persistTimer = setTimeout(() => {
+      persistTimer = null;
+      try {
+        localStorage.setItem("listen1_settings", JSON.stringify(next));
+      } catch {}
+    }, 200);
+  }
 
   return {
     subscribe,
     update,
     set(s: AppSettings) {
       set(s);
-      localStorage.setItem("listen1_settings", JSON.stringify(s));
+      persist(s);
     },
     patch(partial: Partial<AppSettings>) {
+      let next = {} as AppSettings;
       update((s) => {
-        const next = { ...s, ...partial };
-        localStorage.setItem("listen1_settings", JSON.stringify(next));
+        next = { ...s, ...partial };
         return next;
       });
+      persist(next);
     },
   };
 }

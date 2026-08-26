@@ -11,6 +11,18 @@ use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+/// 进程级共享 tokio Runtime：替代每请求创建 Runtime（创建成本高且产生额外线程）。
+pub(crate) fn shared_runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("failed to build shared tokio runtime")
+    })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub mode: String, // "system" | "direct" | "manual"
@@ -602,10 +614,7 @@ fn remote_stream_response(url: &str, range: Option<&str>, no_cache_write: bool, 
         return Ok(cached);
     }
 
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let rt = shared_runtime();
 
     rt.block_on(async move {
         let client = build_client()?;
@@ -650,34 +659,47 @@ fn remote_stream_response(url: &str, range: Option<&str>, no_cache_write: bool, 
 
         if !no_cache_write && content_range.is_none() && should_cache_stream_response(status, &content_type, &bytes) {
             cache::write(url, &content_type, &bytes, cache_id);
-            if let Some(cached) = cached_stream_response(url, range, "write", cache_id) {
-                return Ok(cached);
-            }
+            // 直接用已持有的字节构造响应，避免写盘后立刻重读整个文件。
+            return Ok(full_body_stream_response(status, &content_type, content_range.as_deref(), bytes, "miss"));
         }
 
-        let mut headers = vec![
-            ("Content-Type".into(), content_type),
-            ("Content-Length".into(), bytes.len().to_string()),
-            ("Cache-Control".into(), "public, max-age=86400".into()),
-            ("Access-Control-Allow-Origin".into(), "*".into()),
-            (
-                "Access-Control-Expose-Headers".into(),
-                cache_expose_headers().into(),
-            ),
-            ("X-Listen1-Cache".into(), "miss".into()),
-        ];
+        Ok(full_body_stream_response(
+            status,
+            &content_type,
+            content_range.as_deref(),
+            bytes,
+            "miss",
+        ))
+    })
+}
 
-        if let Some(content_range) = content_range {
-            headers.push(("Content-Range".into(), content_range));
+fn full_body_stream_response(
+    status: u16,
+    content_type: &str,
+    content_range: Option<&str>,
+    body: Vec<u8>,
+    cache_state: &str,
+) -> StreamResponse {
+    let mut headers = vec![
+        ("Content-Type".into(), content_type.to_string()),
+        ("Content-Length".into(), body.len().to_string()),
+        ("Cache-Control".into(), "public, max-age=86400".into()),
+        ("Access-Control-Allow-Origin".into(), "*".into()),
+        (
+            "Access-Control-Expose-Headers".into(),
+            cache_expose_headers().into(),
+        ),
+        ("X-Listen1-Cache".into(), cache_state.into()),
+    ];
+
+    if let Some(content_range) = content_range {
+        if !content_range.is_empty() {
+            headers.push(("Content-Range".into(), content_range.to_string()));
             headers.push(("Accept-Ranges".into(), "bytes".into()));
         }
+    }
 
-        Ok(StreamResponse {
-            status,
-            headers,
-            body: bytes,
-        })
-    })
+    StreamResponse { status, headers, body }
 }
 
 fn status_text(status: u16) -> &'static str {
@@ -898,12 +920,6 @@ pub async fn handle_stream_protocol(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("application/octet-stream")
         .to_string();
-    let content_length = resp
-        .headers()
-        .get("content-length")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
     let content_range = resp
         .headers()
         .get("content-range")
@@ -915,30 +931,15 @@ pub async fn handle_stream_protocol(
 
     if !no_cache_write && content_range.is_empty() && should_cache_stream_response(status, &content_type, &bytes) {
         cache::write(&real_url, &content_type, &bytes, cache_id.as_deref());
-        if let Some(cached) = cached_stream_response(&real_url, range_header, "write", cache_id.as_deref()) {
-            let mut builder = Response::builder().status(cached.status);
-            for (name, value) in cached.headers {
-                builder = builder.header(name, value);
-            }
-            return Ok(builder.body(cached.body).unwrap());
-        }
+        // 直接用已持有的字节构造响应，避免写盘后立刻重读整个文件。
     }
 
-    let mut builder = Response::builder()
-        .status(status)
-        .header("Content-Type", &content_type)
-        .header("Cache-Control", "public, max-age=86400")
-        .header("Access-Control-Allow-Origin", "*")
-        .header("Access-Control-Expose-Headers", cache_expose_headers())
-        .header("X-Listen1-Cache", "miss");
-
-    if !content_length.is_empty() {
-        builder = builder.header("Content-Length", &content_length);
-    }
-    if !content_range.is_empty() {
-        builder = builder.header("Content-Range", &content_range);
-        builder = builder.header("Accept-Ranges", "bytes");
-    }
-
-    Ok(builder.body(bytes).unwrap())
+    let response = full_body_stream_response(
+        status,
+        &content_type,
+        Some(content_range.as_str()),
+        bytes,
+        "miss",
+    );
+    Ok(tauri_response_from_stream_response(response))
 }

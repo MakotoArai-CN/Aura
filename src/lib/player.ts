@@ -1,5 +1,5 @@
 import { Howl, Howler } from "howler";
-import { playerState, type Track, type LoopMode } from "./stores/player";
+import { playerState, playbackClock, type Track, type LoopMode } from "./stores/player";
 import { get } from "svelte/store";
 import { MediaService } from "./providers/index";
 import { localmusic } from "./providers/localmusic";
@@ -18,9 +18,9 @@ class Listen1Player {
   private howls = new Map<string, Howl>();
   private index = -1;
   private _loopMode: LoopMode = 0;
-  private refreshTimer: ReturnType<typeof setInterval> | null = null;
   private playedFrom = 0;
   private preloadTrackId: string | null = null;
+  private preloadBackoffUntil = 0;
   private pauseFadeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly preloadThresholdSeconds = 12;
   private readonly fadeInMs = 160;
@@ -37,24 +37,50 @@ class Listen1Player {
   private manualSkipDirection: "next" | "prev" | "random" | null = null;
 
   constructor() {
-    this.setRefreshRate(5);
     this.restoreFromStorage();
     this.setupMediaSession();
+    window.addEventListener("beforeunload", () => {
+      if (this.saveStorageTimer) {
+        clearTimeout(this.saveStorageTimer);
+        this.saveStorageTimer = null;
+        this.writeQueueToStorage();
+      }
+    });
   }
 
   // ─── Internal ─────────────────────────────────────────────
 
-  private setRefreshRate(fps: number) {
-    if (this.refreshTimer) clearInterval(this.refreshTimer);
-    this.refreshTimer = setInterval(() => {
+  /**
+   * 进度循环：仅播放期间运行（250ms），暂停/停止即清除。
+   * 高频 position/duration 写入 playbackClock，不再触碰 playerState，
+   * 避免全应用订阅者每 tick 失效重算；空闲时定时器不存在，CPU 占用为零。
+   */
+  private progressTimer: ReturnType<typeof setInterval> | null = null;
+
+  private progressTick() {
+    const h = this.currentHowl;
+    if (!h || !h.playing()) return;
+    const pos = Number(h.seek() ?? 0);
+    const duration = Number(h.duration() ?? 0);
+    playbackClock.update(Number.isFinite(pos) ? pos : 0, Number.isFinite(duration) ? duration : 0);
+    this.maybePreloadUpcoming(pos, duration);
+  }
+
+  private startProgressLoop() {
+    if (this.progressTimer) return;
+    this.progressTimer = setInterval(() => this.progressTick(), 250);
+    this.progressTick();
+  }
+
+  private stopProgressLoop(finalPosition?: number) {
+    if (this.progressTimer) {
+      clearInterval(this.progressTimer);
+      this.progressTimer = null;
+    }
+    if (finalPosition !== undefined) {
       const h = this.currentHowl;
-      if (h && h.playing()) {
-        const pos = h.seek() as number;
-        const duration = h.duration() ?? 0;
-        playerState.patch({ position: pos, playing: true, duration });
-        this.maybePreloadUpcoming(pos, duration);
-      }
-    }, 1000 / fps);
+      playbackClock.update(finalPosition, Number(h?.duration() ?? 0));
+    }
   }
 
   private setupMediaSession() {
@@ -156,6 +182,8 @@ class Listen1Player {
   private maybePreloadUpcoming(position: number, duration: number) {
     if (!Number.isFinite(duration) || duration <= 0) return;
     if (duration - position > this.preloadThresholdSeconds) return;
+    // 解析失败退避：避免结尾窗口内每 250ms 重试 IPC/网络。
+    if (Date.now() < this.preloadBackoffUntil) return;
     void this.preloadUpcoming();
   }
 
@@ -197,6 +225,7 @@ class Listen1Player {
         self._failCount = 0;
         self._isAutoSkipping = false;
         playerState.patch({ playing: true, loading: false, muted: state.muted });
+        self.startProgressLoop();
         self.updateMediaSession();
         if (autoplay) h.fade(0, state.muted ? 0 : (self.targetHowlVolume() || storedVolume), self.fadeInMs);
         window.dispatchEvent(new CustomEvent("l1:play_state", { detail: { isPlaying: true, track } }));
@@ -204,12 +233,14 @@ class Listen1Player {
       onpause() {
         if (!self.isCurrentTrack(track)) return;
         playerState.patch({ playing: false });
+        self.stopProgressLoop(Number(h.seek() ?? 0));
         self.updateMediaSession();
         window.dispatchEvent(new CustomEvent("l1:play_state", { detail: { isPlaying: false, reason: "Paused" } }));
       },
       onstop() {
         if (!self.isCurrentTrack(track)) return;
         playerState.patch({ playing: false, position: 0 });
+        self.stopProgressLoop(0);
       },
       onend() {
         if (!self.isCurrentTrack(track)) return;
@@ -222,6 +253,7 @@ class Listen1Player {
         }
         self.playedFrom = Date.now();
         playerState.patch({ playing: false });
+        self.stopProgressLoop(duration);
         self.updateMediaSession();
         window.dispatchEvent(new CustomEvent("l1:play_state", { detail: { isPlaying: false, reason: "Ended" } }));
         self._failCount = 0; // natural end = success, reset for next song
@@ -270,6 +302,7 @@ class Listen1Player {
       const retryTarget = this.decodeStreamTarget(track.sound_url ?? "") ?? track.url ?? track.sound_url ?? "";
       const retryKey = `${track.id}::${retryTarget}`;
       if (retryTarget && !this.transientRetryKeys.has(retryKey)) {
+        if (this.transientRetryKeys.size > 100) this.transientRetryKeys.clear();
         this.transientRetryKeys.add(retryKey);
         this.howls.get(track.id)?.unload();
         this.howls.delete(track.id);
@@ -336,6 +369,9 @@ class Listen1Player {
     const currentSource = track.platform || track.source;
     if (currentSource) failedSources.add(currentSource);
     if (track.source) failedSources.add(track.source);
+    // 内存卫生：长会话下防止无界增长。
+    if (this.failedSourcesByTrackKey.size > 300) this.failedSourcesByTrackKey.clear();
+    if (this.failoverAttemptIds.size > 300) this.failoverAttemptIds.clear();
     this.failedSourcesByTrackKey.set(key, failedSources);
 
     const oldId = track.id;
@@ -435,6 +471,7 @@ class Listen1Player {
     const track = this.playlist[this.index];
     if (!track) return;
     this.playedFrom = Date.now();
+    playbackClock.update(0, 0);
     playerState.patch({ loading: true, position: 0, currentTrack: track, currentIndex: this.index });
     void this._resolveAndPlay(track);
     this.saveToStorage();
@@ -724,6 +761,7 @@ class Listen1Player {
     const resolved = await this.resolveTrackUrl(track, false).catch(() => false);
     if (!resolved) {
       if (this.preloadTrackId === track.id) this.preloadTrackId = null;
+      this.preloadBackoffUntil = Date.now() + 5000;
       return;
     }
     if (this.howls.has(track.id)) {
@@ -906,6 +944,7 @@ class Listen1Player {
     playerState.patch({ playing: false });
     if (!h.playing()) {
       h.pause();
+      this.stopProgressLoop(Number(h.seek() ?? 0));
       this.updateMediaSession();
       return;
     }
@@ -917,6 +956,7 @@ class Listen1Player {
       h.pause();
       h.volume(this.targetHowlVolume());
     }
+    this.stopProgressLoop(Number(h.seek() ?? 0));
     this.updateMediaSession();
   }
 
@@ -968,7 +1008,11 @@ class Listen1Player {
 
   seek(percent: number) {
     const h = this.currentHowl;
-    if (h) h.seek((percent / 100) * h.duration());
+    if (!h) return;
+    const duration = Number(h.duration() || 0);
+    const target = (percent / 100) * duration;
+    h.seek(target);
+    playbackClock.update(Number.isFinite(target) ? target : 0, duration);
   }
 
   seekRelative(seconds: number) {
@@ -979,7 +1023,7 @@ class Listen1Player {
     const current = Number(h.seek() || 0);
     const next = Math.max(0, Math.min(duration, current + seconds));
     h.seek(next);
-    playerState.patch({ position: next, duration });
+    playbackClock.update(next, duration);
   }
 
   get volume(): number { return Howler.volume() * 100; }
@@ -1086,7 +1130,26 @@ class Listen1Player {
   getPlayedFrom(): number { return this.playedFrom; }
   getTrackById(id: string): Track | undefined { return this.playlist.find((t) => t.id === id); }
 
-  private saveToStorage() {
+  private saveStorageTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 持久化播放队列（防抖合并，千首级队列不再每次操作全量 stringify 卡顿主线程）。 */
+  private saveToStorage(immediate = false) {
+    if (immediate) {
+      if (this.saveStorageTimer) {
+        clearTimeout(this.saveStorageTimer);
+        this.saveStorageTimer = null;
+      }
+      this.writeQueueToStorage();
+      return;
+    }
+    if (this.saveStorageTimer) return;
+    this.saveStorageTimer = setTimeout(() => {
+      this.saveStorageTimer = null;
+      this.writeQueueToStorage();
+    }, 400);
+  }
+
+  private writeQueueToStorage() {
     localStorage.setItem("current-playing", JSON.stringify(this.playlist.map((t) => this.trackForStorage(t))));
     this.savePlayerSettings();
   }

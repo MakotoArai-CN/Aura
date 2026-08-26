@@ -613,9 +613,9 @@
                 aria-valuemax="100"
               >
                 <div class="barbg">
-                  <div class="cur" style="width:{isDragging ? dragPercent : $progressPercent}%">
-                    <span class="btn"><i></i></span>
-                  </div>
+                  <div class="cur" style="clip-path: inset(0 {100 - $playerState.volume}% 0 0)"></div>
+                  <span class="btn" style="left:{$playerState.volume}%"><i></i></span>
+                </div>
                 </div>
               </div>
             </div>
@@ -647,14 +647,12 @@
                 aria-valuenow={$playerState.muted ? 0 : $playerState.volume}
               >
                 <div class="barbg">
-                  <div class="cur" style="width:{$playerState.volume}%">
-                    <span class="btn"><i></i></span>
-                  </div>
+                  <div class="cur" style="clip-path: inset(0 {100 - (isDragging ? dragPercent : $progressPercent)}% 0 0)"></div>
+                  <span class="btn" style="left:{isDragging ? dragPercent : $progressPercent}%"><i></i></span>
                 </div>
               </div>
             </div>
-          </div>
-          <div class="timeswitch">
+            <div class="timeswitch">
             <span class="current">{$positionFormatted}</span>
             <span style="font-weight:700"> / </span>
             <span class="total">{$durationFormatted}</span>
@@ -1409,12 +1407,21 @@
   .barbg {
     height: 3px;
     background: var(--footer-player-bar-background-color);
+    position: relative;
   }
 
   .barbg .cur {
     height: 100%;
+    width: 100%;
     background: var(--footer-player-bar-cur-background-color);
-    position: relative;
+    /* clip-path 替代 width：进度更新不再触发布局，仅重绘该层 */
+    will-change: clip-path;
+  }
+
+  .barbg .btn {
+    position: absolute;
+    top: -5px;
+    transform: translateX(-50%);
   }
 
   .playbar .playbar-clickable:hover .cur,
@@ -1424,20 +1431,17 @@
     background: var(--theme-color);
   }
 
-  .barbg .cur .btn {
+  .barbg .btn {
     background: var(--footer-player-bar-cur-button-color);
     height: 8px;
     width: 2px;
-    position: absolute;
-    right: -2px;
-    top: -5px;
     transition: 0.3s;
   }
 
-  .playbar .playbar-clickable:hover .barbg .cur .btn,
-  .playbar .playbar-clickable:focus-visible .barbg .cur .btn,
-  .m-pbar:focus-visible .barbg .cur .btn,
-  .m-pbar:hover .barbg .cur .btn {
+  .playbar .playbar-clickable:hover .barbg .btn,
+  .playbar .playbar-clickable:focus-visible .barbg .btn,
+  .m-pbar:focus-visible .barbg .btn,
+  .m-pbar:hover .barbg .btn {
     width: 10px;
     height: 10px;
     border-radius: 5px;

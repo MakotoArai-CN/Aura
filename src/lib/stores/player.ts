@@ -69,16 +69,39 @@ function createPlayerStore() {
 
 export const playerState = createPlayerStore();
 
-export const progressPercent = derived(playerState, ($s) =>
-  $s.duration > 0 ? ($s.position / $s.duration) * 100 : 0
+/**
+ * 高频播放时钟：position/duration 与 playerState 解耦。
+ * 进度条、时间文本、歌词同步只订阅此 store，避免每次 tick
+ * 让全应用所有 $playerState 订阅者失效重算。
+ */
+function createPlaybackClock() {
+  const { subscribe, set } = writable<{ position: number; duration: number }>({ position: 0, duration: 0 });
+  let lastPosition = -1;
+  let lastDuration = -1;
+  return {
+    subscribe,
+    update(position: number, duration: number) {
+      // 数值未变时不发通知，暂停/缓冲期间零开销。
+      if (position === lastPosition && duration === lastDuration) return;
+      lastPosition = position;
+      lastDuration = duration;
+      set({ position, duration });
+    },
+  };
+}
+
+export const playbackClock = createPlaybackClock();
+
+export const progressPercent = derived(playbackClock, ($c) =>
+  $c.duration > 0 ? Math.max(0, Math.min(100, ($c.position / $c.duration) * 100)) : 0
 );
 
-export const positionFormatted = derived(playerState, ($s) => {
-  const s = Math.floor($s.position);
+export const positionFormatted = derived(playbackClock, ($c) => {
+  const s = Math.floor($c.position);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 });
 
-export const durationFormatted = derived(playerState, ($s) => {
-  const s = Math.floor($s.duration);
+export const durationFormatted = derived(playbackClock, ($c) => {
+  const s = Math.floor($c.duration);
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 });

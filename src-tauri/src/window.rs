@@ -145,9 +145,35 @@ pub fn open_login_window(app: AppHandle, url: String) -> Result<(), String> {
     #[cfg(debug_assertions)]
     eprintln!("[listen1] open_login_window {url}");
 
-    let login = app
-        .get_webview_window("login")
-        .ok_or_else(|| "login window not found".to_string())?;
+    // 惰性创建登录窗口：平时不驻留 WebView 进程，节省内存。
+    let login = match app.get_webview_window("login") {
+        Some(login) => login,
+        None => {
+            #[cfg(debug_assertions)]
+            let login_url = tauri::WebviewUrl::External(
+                app.config()
+                    .build
+                    .dev_url
+                    .clone()
+                    .unwrap_or_else(|| tauri::Url::parse("http://localhost:1420").unwrap())
+                    .join("login.html")
+                    .map_err(|e| e.to_string())?,
+            );
+            #[cfg(not(debug_assertions))]
+            let login_url = tauri::WebviewUrl::App("login.html".into());
+            tauri::WebviewWindowBuilder::new(&app, "login", login_url)
+                .title("Aura 登录")
+                .inner_size(985.0, 700.0)
+                .min_inner_size(760.0, 560.0)
+                .resizable(true)
+                .maximizable(true)
+                .minimizable(true)
+                .center()
+                .visible(false)
+                .build()
+                .map_err(|e| e.to_string())?
+        }
+    };
     let mut login_url = app
         .get_webview_window("main")
         .and_then(|main| main.url().ok())

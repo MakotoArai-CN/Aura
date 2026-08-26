@@ -118,6 +118,47 @@ fn index_path(dir: &Path) -> PathBuf {
     dir.join("index.json")
 }
 
+/// 内存索引：避免每次缓存命中都读+写 index.json。
+/// 播放期间 HTML5 Audio 会发起大量 Range 请求，磁盘往返成为热点。
+/// 命中计数仅记内存，随下一次写操作/统计查询落盘。
+struct MemoryIndex {
+    dir: PathBuf,
+    index: CacheIndex,
+    hits_dirty: bool,
+}
+
+fn memory_index() -> &'static Mutex<Option<MemoryIndex>> {
+    static MEM_INDEX: OnceLock<Mutex<Option<MemoryIndex>>> = OnceLock::new();
+    MEM_INDEX.get_or_init(|| Mutex::new(None))
+}
+
+fn load_memory_index(dir: &Path) -> std::sync::MutexGuard<'static, Option<MemoryIndex>> {
+    let mut guard = memory_index()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let needs_reload = match guard.as_ref() {
+        Some(mem) => mem.dir != dir,
+        None => true,
+    };
+    if needs_reload {
+        *guard = Some(MemoryIndex {
+            dir: dir.to_path_buf(),
+            index: read_index(dir),
+            hits_dirty: false,
+        });
+    }
+    guard
+}
+
+fn persist_if_dirty(guard: &mut std::sync::MutexGuard<'static, Option<MemoryIndex>>) {
+    if let Some(mem) = guard.as_mut() {
+        if mem.hits_dirty {
+            write_index(&mem.dir, &mem.index);
+            mem.hits_dirty = false;
+        }
+    }
+}
+
 fn read_index(dir: &Path) -> CacheIndex {
     let path = index_path(dir);
     let Ok(text) = std::fs::read_to_string(path) else {
@@ -273,24 +314,27 @@ pub fn try_read(url: &str, range_header: Option<&str>, cache_id: Option<&str>) -
     }
 
     let dir = active_cache_dir();
-    let mut index = read_index(&dir);
+    let mut mem_guard = load_memory_index(&dir);
+    let mem = mem_guard.as_mut()?;
     let key = cache_key_for(cache_id, url);
     let now = now_secs();
-    let mut entry = index.entries.get(&key)?.clone();
+    // 只克隆轻量元数据，正文按需从磁盘读取。
+    let entry = mem.index.entries.get(&key)?.clone();
     let path = dir.join(&entry.file_name);
     if !path.exists() {
-        index.entries.remove(&key);
-        write_index(&dir, &index);
+        mem.index.entries.remove(&key);
+        write_index(&dir, &mem.index);
         return None;
     }
 
     let response = response_from_file(&entry, &path, range_header)?;
-    entry.hits = entry.hits.saturating_add(1);
-    entry.last_access_at = now;
-    entry.score = score_entry(&entry, now);
-    entry.category = category_entry(&entry, now);
-    index.entries.insert(key, entry);
-    write_index(&dir, &index);
+    if let Some(stored) = mem.index.entries.get_mut(&key) {
+        stored.hits = stored.hits.saturating_add(1);
+        stored.last_access_at = now;
+        stored.score = score_entry(stored, now);
+        stored.category = category_entry(stored, now);
+    }
+    mem.hits_dirty = true;
 
     Some(response)
 }
@@ -314,28 +358,35 @@ pub fn write(url: &str, content_type: &str, bytes: &[u8], cache_id: Option<&str>
     }
 
     let now = now_secs();
-    let mut index = read_index(&dir);
-    let previous_hits = index.entries.get(&key).map(|entry| entry.hits).unwrap_or(0);
+    let mut mem_guard = load_memory_index(&dir);
+    let mem = match mem_guard.as_mut() {
+        Some(mem) => mem,
+        None => return,
+    };
+    let previous_hits = mem.index.entries.get(&key).map(|entry| entry.hits).unwrap_or(0);
+    let created_at = mem
+        .index
+        .entries
+        .get(&key)
+        .map(|entry| entry.created_at)
+        .unwrap_or(now);
     let mut entry = CacheEntry {
         url: url.to_string(),
         file_name,
         content_type: content_type.to_string(),
         size: bytes.len() as u64,
         hits: previous_hits.saturating_add(1),
-        created_at: index
-            .entries
-            .get(&key)
-            .map(|entry| entry.created_at)
-            .unwrap_or(now),
+        created_at,
         last_access_at: now,
         score: 0.0,
         category: "warm".to_string(),
     };
     entry.score = score_entry(&entry, now);
     entry.category = category_entry(&entry, now);
-    index.entries.insert(key, entry);
-    cleanup_index(&dir, &mut index, config.max_bytes);
-    write_index(&dir, &index);
+    mem.index.entries.insert(key, entry);
+    cleanup_index(&dir, &mut mem.index, config.max_bytes);
+    write_index(&dir, &mem.index);
+    mem.hits_dirty = false;
 }
 
 fn cleanup_index(dir: &Path, index: &mut CacheIndex, max_bytes: u64) {
@@ -395,15 +446,27 @@ pub fn set_cache_config(config: CacheConfig) {
 pub fn get_cache_stats() -> CacheStats {
     let config = active_config();
     let dir = active_cache_dir();
-    let mut index = read_index(&dir);
-    cleanup_index(&dir, &mut index, config.max_bytes);
-    write_index(&dir, &index);
+    let mut mem_guard = load_memory_index(&dir);
+    if mem_guard.is_none() {
+        return CacheStats {
+            enabled: config.enabled,
+            directory: dir.to_string_lossy().to_string(),
+            max_bytes: config.max_bytes,
+            total_bytes: 0,
+            entry_count: 0,
+            hot_count: 0,
+            warm_count: 0,
+            cold_count: 0,
+        };
+    }
+    let index = &mut mem_guard.as_mut().unwrap().index;
+    cleanup_index(&dir, index, config.max_bytes);
 
-    CacheStats {
+    let stats = CacheStats {
         enabled: config.enabled,
         directory: dir.to_string_lossy().to_string(),
         max_bytes: config.max_bytes,
-        total_bytes: total_size(&index),
+        total_bytes: total_size(index),
         entry_count: index.entries.len(),
         hot_count: index
             .entries
@@ -420,7 +483,12 @@ pub fn get_cache_stats() -> CacheStats {
             .values()
             .filter(|entry| entry.category == "cold")
             .count(),
+    };
+    persist_if_dirty(&mut mem_guard);
+    if let Some(mem) = mem_guard.as_ref() {
+        write_index(&dir, &mem.index);
     }
+    stats
 }
 
 #[tauri::command]
@@ -433,6 +501,14 @@ pub fn clear_audio_cache() -> Result<(), String> {
                 std::fs::remove_file(path).map_err(|e| e.to_string())?;
             }
         }
+    }
+    // 同步重置内存索引，避免残留旧条目。
+    if let Ok(mut guard) = memory_index().lock() {
+        *guard = Some(MemoryIndex {
+            dir: dir.clone(),
+            index: CacheIndex::default(),
+            hits_dirty: false,
+        });
     }
     write_index(&dir, &CacheIndex::default());
     Ok(())

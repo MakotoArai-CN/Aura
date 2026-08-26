@@ -21,38 +21,6 @@
         "decorations": false,
         "transparent": true,
         "center": true
-      },
-      {
-        "label": "float",
-        "title": "Aura Lyrics",
-        "url": "float.html",
-        "width": 1000,
-        "height": 70,
-        "minWidth": 640,
-        "minHeight": 60,
-        "maxWidth": 1920,
-        "maxHeight": 220,
-        "decorations": false,
-        "transparent": true,
-        "shadow": false,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "visible": false
-      },
-      {
-        "label": "login",
-        "title": "Aura 登录",
-        "url": "login.html",
-        "width": 985,
-        "height": 700,
-        "minWidth": 760,
-        "minHeight": 560,
-        "decorations": true,
-        "resizable": true,
-        "maximizable": true,
-        "minimizable": true,
-        "center": true,
-        "visible": false
       }
     ],
     "security": {

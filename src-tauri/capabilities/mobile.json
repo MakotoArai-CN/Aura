@@ -6,9 +6,12 @@
   "platforms": ["android", "iOS"],
   "permissions": [
     "core:default",
+    "core:window:default",
+    "core:window:allow-start-dragging",
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
+    "core:event:allow-emit-to",
     "shell:allow-open",
     "dialog:allow-open",
     "fs:allow-read-file"

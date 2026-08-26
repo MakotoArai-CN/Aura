@@ -428,10 +428,13 @@
 
   .row-spectrum span {
     width: 4px;
-    height: 3px;
+    height: 12px;
     border-radius: 999px;
     background: var(--theme-color);
     opacity: 0.35;
+    /* scaleY 替代 height：动画走合成器，不触发布局 */
+    transform-origin: bottom;
+    transform: scaleY(0.25);
   }
 
   .row-spectrum.active span {
@@ -445,13 +448,8 @@
   .row-spectrum span:nth-child(6) { animation-delay: 0.31s; }
 
   @keyframes spectrumBeat {
-    0%, 100% { height: 3px; opacity: 0.55; }
-    45% { height: 12px; opacity: 1; }
-  }
-
-  @keyframes spectrumIdle {
-    0%, 100% { height: 3px; opacity: 0.3; }
-    50% { height: 6px; opacity: 0.5; }
+    0%, 100% { transform: scaleY(0.25); opacity: 0.55; }
+    45% { transform: scaleY(1); opacity: 1; }
   }
 
   /* Context menu */

@@ -42,8 +42,8 @@ pub fn run() {
         .manage(window::FloatingLyricSettingsState::default())
         .register_asynchronous_uri_scheme_protocol("stream", move |_ctx, request, responder| {
             std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                let result = rt.block_on(proxy::handle_stream_protocol(request));
+                // 复用进程级共享 Runtime，避免每请求创建 tokio Runtime。
+                let result = proxy::shared_runtime().block_on(proxy::handle_stream_protocol(request));
                 match result {
                     Ok(response) => responder.respond(response),
                     Err(e) => {
@@ -72,15 +72,24 @@ pub fn run() {
             match event {
                 tauri::WindowEvent::CloseRequested { api, .. } => {
                     if window.label() == "main" {
+                        // 桌面端：关闭=隐藏到托盘；移动端：直接放行退出（hide 不可用时 unwrap 会 panic）。
                         #[cfg(desktop)]
-                        let app = window.app_handle().clone();
-                        window.hide().unwrap();
-                        #[cfg(desktop)]
-                        crate::window::sync_float_visibility_for_main(&app, false);
-                        api.prevent_close();
+                        {
+                            let app = window.app_handle().clone();
+                            let _ = window.hide();
+                            crate::window::sync_float_visibility_for_main(&app, false);
+                            api.prevent_close();
+                        }
+                        #[cfg(not(desktop))]
+                        {
+                            let _ = &api;
+                        }
                     } else if window.label() == "login" {
-                        let _ = window.hide();
-                        api.prevent_close();
+                        #[cfg(desktop)]
+                        {
+                            let _ = window.hide();
+                            api.prevent_close();
+                        }
                     }
                 }
                 // 处理（含任务栏）最小化/还原：自定义标题栏按钮走 window_minimize 命令，
