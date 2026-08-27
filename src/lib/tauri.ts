@@ -256,9 +256,14 @@ export interface AudioMeta {
   artist?: string;
   album?: string;
   lyrics?: string;
+  /** 可直接当 src 用的封面地址（downloads 写的 sidecar 里带的 http / data URL）。 */
   cover?: string;
+  /** 内嵌封面落盘后的绝对路径，转成 file:// 存起来，渲染时由 proxyResourceUrl 兜。 */
+  cover_path?: string;
   duration?: number;
   bitrate?: number;
+  /** false = 文件标签没读出来（格式不认/文件损坏），不能当成「这首歌就是没信息」缓存。 */
+  tags_read?: boolean;
 }
 
 export const readAudioTags = (path: string): Promise<AudioMeta> =>
@@ -325,6 +330,11 @@ export const getCacheStats = (): Promise<AudioCacheStats> =>
   invoke("get_cache_stats");
 export const clearAudioCache = () =>
   invoke("clear_audio_cache");
+/** 离线播放探测：传入稳定缓存键（平台:歌曲ID），命中则返回已落盘音频的绝对路径。 */
+export const audioCacheLookup = async (cacheId: string): Promise<string | null> => {
+  if (!isTauriRuntime() || !cacheId) return null;
+  return invoke<string | null>("audio_cache_lookup", { cacheId });
+};
 export const getResourceUsage = (): Promise<ResourceUsage> =>
   invoke("get_resource_usage");
 
@@ -332,6 +342,13 @@ export type DeviceTier = "high" | "mid" | "low";
 
 export const getDeviceTier = (): Promise<DeviceTier> =>
   invoke<DeviceTier>("get_device_tier");
+
+/**
+ * 把用户手动选的效果档位落到 Rust 侧。只影响下一次启动的 GPU 启动参数——
+ * 本次运行的 CSS 效果由前端 store 直接切换，不依赖这个调用成功。
+ */
+export const setEffectTierOverride = (tier: "auto" | "ultra" | DeviceTier): Promise<void> =>
+  invoke("set_effect_tier_override", { tier });
 
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!isTauriRuntime()) return;

@@ -44,8 +44,17 @@ export function proxyResourceUrl(url?: string | null): string {
     return normalized;
   }
   const decoded = decodeStreamTarget(normalized);
-  if (decoded) return decoded;
+  const target = decoded ?? normalized;
   const streamBase = streamBaseUrl();
+  // 本机文件（本地音乐的内嵌封面落盘后就是这种地址）：webview 从 http/tauri 源
+  // 加载 file:// 会被拦，必须经本机流服务器转一手。存储里始终只放 file:// 原样，
+  // 端口每次启动都不同，所以只在渲染时拼——存下来的地址下次启动会失效。
+  if (/^file:\/\//i.test(target)) {
+    const encoded = encodeURIComponent(target);
+    if (streamBase) return `${streamBase}${encoded}`;
+    return isTauriRuntime() ? `${TAURI_STREAM_PREFIX}${encoded}` : "";
+  }
+  if (decoded) return decoded;
   if (NEEDS_REFERER_PROXY_RE.test(normalized)) {
     const encoded = encodeURIComponent(normalized);
     if (streamBase) return `${streamBase}${encoded}`;

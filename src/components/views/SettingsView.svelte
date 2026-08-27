@@ -18,6 +18,8 @@
     getUpdateAssets,
     downloadAndRunUpdate,
     openExternalUrl,
+    setEffectTierOverride,
+    isTauriRuntime,
     type UpdateAsset,
   } from "../../lib/tauri";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "../../lib/shortcuts";
@@ -32,11 +34,50 @@
     type ShortcutAction,
   } from "../../lib/shortcutConfig";
   import { toast } from "../../lib/stores/toast";
+  import { deviceTier, detectedTier, runtimeDowngrade } from "../../lib/stores/device";
+
+  /**
+   * 效果滑条：0 档是「自动」，右边四档是手动锁定，越往右开销越大。
+   * 自动最高只会选到「完整」——「极致」超出自动策略的性能承诺，只能手动选。
+   */
+  const EFFECT_STOPS: Array<{ id: AppSettings["effectTier"]; label: string }> = [
+    { id: "auto", label: "自动" },
+    { id: "low", label: "最低" },
+    { id: "mid", label: "均衡" },
+    { id: "high", label: "完整" },
+    { id: "ultra", label: "极致" },
+  ];
+  const TIER_LABELS: Record<string, string> = { low: "最低", mid: "均衡", high: "完整", ultra: "极致" };
+
+  let effectTierIndex = $derived(
+    Math.max(0, EFFECT_STOPS.findIndex((s) => s.id === $settings.effectTier))
+  );
+  let effectTierHint = $derived(
+    $settings.effectTier === "auto"
+      ? `按设备性能自动调节，当前：${TIER_LABELS[$deviceTier] ?? $deviceTier}` +
+        ($runtimeDowngrade > 0 ? `（检测为${TIER_LABELS[$detectedTier]}，因 CPU 占用偏高已降 ${$runtimeDowngrade} 档）` : "")
+      : `已手动锁定为${TIER_LABELS[$settings.effectTier] ?? $settings.effectTier}，不再自动升降`
+  );
+
+  /**
+   * 改档：CSS 侧跟着 store 立即生效；同时把选择写进 Rust 侧的小文件，因为 WebView2
+   * 的 GPU 启动参数必须在窗口创建之前就定下来，那一刻 localStorage 还读不到。
+   * 写失败只记日志——界面已经变了，只是 GPU 参数下次启动仍是旧的，不值得打断用户。
+   */
+  function applyEffectTier(id: AppSettings["effectTier"]) {
+    if (id === $settings.effectTier) return;
+    settings.patch({ effectTier: id });
+    if (!isTauriRuntime()) return;
+    setEffectTierOverride(id).catch((error) => {
+      console.warn("[SettingsView] 效果档位写入 Rust 失败", error);
+    });
+  }
 
   const THEMES: Array<{ id: AppSettings["theme"]; name: string; desc: string; color: string }> = [
     { id: "black2", name: "深曜黑", desc: "沉静高对比暗色", color: "#222222" },
     { id: "white2", name: "晨雾白", desc: "柔和清爽亮色", color: "#ffffff" },
     { id: "liquidGlass", name: "流光玻璃", desc: "通透层次材质", color: "#dfe8ee" },
+    { id: "auto", name: "自动", desc: "跟随系统深浅色", color: "conic-gradient(from 210deg, #4285f4, #9b72cb 22%, #d96570 44%, #f2a60c 62%, #1ea446 80%, #4285f4)" },
   ];
 
   const SOURCE_NAMES: Record<string, string> = {
@@ -84,10 +125,10 @@
     color: string;
     surface: string;
     glow: string;
+    rainbow: boolean;
     id: number;
   } | null>(null);
   let rippleId = 0;
-  let immersivePlayerAvailable = $derived($settings.theme === "black2");
 
   onMount(async () => {
     try {
@@ -210,10 +251,15 @@
   }
 
   function themeColor(id: AppSettings["theme"]) {
+    if (id === "auto") return "#4285f4";
     return THEMES.find((item) => item.id === id)?.color ?? "#222222";
   }
 
   function themeSurface(id: AppSettings["theme"]) {
+    if (id === "auto") {
+      // Gemini 风彩虹扩散：多点径向叠加，避免单一 conic 在放大时出现硬缝。
+      return "radial-gradient(circle at 18% 22%, rgba(66,133,244,0.92), transparent 46%), radial-gradient(circle at 78% 18%, rgba(155,114,203,0.88), transparent 44%), radial-gradient(circle at 84% 74%, rgba(217,101,112,0.88), transparent 46%), radial-gradient(circle at 26% 82%, rgba(30,164,70,0.85), transparent 46%), linear-gradient(120deg, rgba(242,166,12,0.72), rgba(66,133,244,0.78))";
+    }
     if (id === "white2") {
       return "radial-gradient(circle at 24% 18%, rgba(1,122,254,0.24), transparent 28%), radial-gradient(circle at 76% 76%, rgba(60,76,120,0.18), transparent 34%), linear-gradient(135deg, rgba(255,255,255,0.88) 0%, rgba(235,241,249,0.90) 45%, rgba(214,224,238,0.92) 100%)";
     }
@@ -224,6 +270,7 @@
   }
 
   function themeGlow(id: AppSettings["theme"]) {
+    if (id === "auto") return "rgba(155,114,203,0.34)";
     if (id === "white2") return "rgba(28,86,148,0.30)";
     if (id === "liquidGlass") return "rgba(90,200,250,0.24)";
     return "rgba(1,122,254,0.28)";
@@ -238,6 +285,7 @@
       color: themeColor(id),
       surface: themeSurface(id),
       glow: themeGlow(id),
+      rainbow: id === "auto",
       id: current,
     };
     setTimeout(() => {
@@ -455,7 +503,7 @@
   <section class="settings-section appearance">
     <div class="section-head">
       <h2>外观</h2>
-      <span>主题会从点击处扩散切换</span>
+      <span></span>
     </div>
     <div class="theme-grid">
       {#each THEMES as t}
@@ -471,31 +519,38 @@
         </button>
       {/each}
     </div>
+    <div class="setting-row wrap effect-tier-row">
+      <div>
+        <strong>视觉效果档位</strong>
+        <span>{effectTierHint}</span>
+      </div>
+      <div class="effect-tier-control">
+        <input
+          type="range"
+          class="range-input"
+          min="0"
+          max={EFFECT_STOPS.length - 1}
+          step="1"
+          value={effectTierIndex}
+          aria-label="视觉效果档位"
+          oninput={(e) => applyEffectTier(EFFECT_STOPS[Number((e.target as HTMLInputElement).value)].id)}
+        />
+        <div class="effect-tier-ticks" aria-hidden="true">
+          {#each EFFECT_STOPS as stop, i}
+            <span class:active={i === effectTierIndex}>{stop.label}</span>
+          {/each}
+        </div>
+        <span class="effect-tier-note">
+          界面效果立即生效；GPU 加速属于启动参数，改档后要下次启动才会跟着变。
+        </span>
+      </div>
+    </div>
   </section>
 
   <section class="settings-section">
     <div class="section-head">
-      <h2>沉浸式播放器</h2>
-      <span>仅替换深曜黑下的底部播放器</span>
-    </div>
-    <div class="setting-row">
-      <div>
-        <strong>沉浸式播放栏</strong>
-        <span>
-          {#if !$settings.enableImmersivePlayer}
-            使用标准底部播放器
-          {:else if immersivePlayerAvailable}
-            深曜黑下启用沉浸式播放栏
-          {:else}
-            仅深曜黑主题可用，当前使用标准底部播放器
-          {/if}
-        </span>
-      </div>
-      <label class="toggle">
-        <input type="checkbox" checked={$settings.enableImmersivePlayer}
-          onchange={(e) => settings.patch({ enableImmersivePlayer: (e.target as HTMLInputElement).checked })} />
-        <span></span>
-      </label>
+      <h2>播放器外观</h2>
+      <span>底部播放器与展开播放器的取色行为</span>
     </div>
     <div class="setting-row">
       <div>
@@ -988,6 +1043,7 @@
   {#if themeRipple}
     <div
       class="theme-ripple"
+      class:rainbow={themeRipple.rainbow}
       style="--ripple-x:{themeRipple.x}px;--ripple-y:{themeRipple.y}px;--ripple-color:{themeRipple.color};--ripple-surface:{themeRipple.surface};--ripple-glow:{themeRipple.glow}"
     ></div>
   {/if}
@@ -1062,7 +1118,7 @@
 
   .theme-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
     gap: 12px;
   }
 
@@ -1138,6 +1194,43 @@
 
   .setting-row.wrap {
     flex-wrap: wrap;
+  }
+
+  /* 效果档位滑条：刻度标签与滑条同宽，两端对齐到滑条两端 */
+  .effect-tier-control {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    width: min(320px, 100%);
+  }
+
+  .effect-tier-control .range-input {
+    width: 100%;
+  }
+
+  .effect-tier-ticks {
+    display: flex;
+    justify-content: space-between;
+  }
+
+  /* 两个类名是为了压过 .setting-row span 的 12px 与省略号（说明文字要能换行） */
+  .effect-tier-control .effect-tier-ticks span {
+    font-size: 11px;
+    color: var(--text-subtitle-color);
+    transition: color var(--dur-fast) var(--ease-soft);
+  }
+
+  .effect-tier-control .effect-tier-ticks span.active {
+    color: var(--theme-color);
+    font-weight: 600;
+  }
+
+  .effect-tier-control .effect-tier-note {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-subtitle-color);
+    white-space: normal;
+    overflow: visible;
   }
 
   .full {
@@ -1651,8 +1744,39 @@
       radial-gradient(circle at var(--ripple-x) var(--ripple-y), transparent 0 42%, rgba(48,82,128,0.24) 43%, transparent 46%),
       radial-gradient(circle at 74% 18%, rgba(1,122,254,0.12), transparent 32%);
     opacity: 0.42;
-    filter: blur(10px);
+    filter: var(--visual-ripple-blur);
     animation: themeEdge 1700ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+  }
+
+  /* 「自动」外观：Gemini 风彩虹扩散。底层多点彩虹来自 --ripple-surface，
+     这里叠一层围绕点击点的 conic 让色相铺开。
+     注意：这层是铺满视口的矩形，绝不能 rotate —— 绕着偏心的点击点旋转会把
+     矩形的四条边转进视口，看起来就是一个正方形框在转。只做由点击点向外的
+     微放大（scale >= 1，边只会往外走，不会露边）+ 透明度渐隐。 */
+  .theme-ripple.rainbow::before {
+    inset: 0;
+    background:
+      conic-gradient(from 0deg at var(--ripple-x) var(--ripple-y),
+        #4285f4 0deg, #9b72cb 72deg, #d96570 144deg, #f2a60c 216deg, #1ea446 288deg, #4285f4 360deg),
+      radial-gradient(circle at var(--ripple-x) var(--ripple-y), rgba(255,255,255,0.92) 0 3%, transparent 24%);
+    mix-blend-mode: screen;
+    opacity: 0;
+    transform-origin: var(--ripple-x) var(--ripple-y);
+    animation: rainbowSheen 1700ms cubic-bezier(0.22, 0.61, 0.36, 1) forwards;
+  }
+
+  .theme-ripple.rainbow::after {
+    inset: 0;
+    background:
+      radial-gradient(circle at var(--ripple-x) var(--ripple-y), transparent 0 40%, rgba(255,255,255,0.46) 42%, transparent 47%);
+    opacity: 0.58;
+  }
+
+  @keyframes rainbowSheen {
+    0% { opacity: 0; transform: scale(1); }
+    18% { opacity: 0.88; }
+    68% { opacity: 0.58; transform: scale(1.04); }
+    100% { opacity: 0; transform: scale(1.06); }
   }
 
   @keyframes themeSpread {

@@ -325,7 +325,9 @@ pub(crate) fn file_url_to_path(url: &str) -> PathBuf {
     PathBuf::from(decoded)
 }
 
-fn audio_content_type(path: &PathBuf) -> &'static str {
+/// 本机文件的 Content-Type。除音频外还要认图片：本地音乐的内嵌封面会落盘成
+/// jpg/png，而 webview 不允许从 http/tauri 源直接加载 `file://`，只能经这台服务器取。
+fn local_content_type(path: &PathBuf) -> &'static str {
     match path
         .extension()
         .and_then(|ext| ext.to_str())
@@ -340,6 +342,11 @@ fn audio_content_type(path: &PathBuf) -> &'static str {
         "wav" => "audio/wav",
         "aif" | "aiff" => "audio/aiff",
         "webm" => "audio/webm",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "gif" => "image/gif",
+        "bmp" => "image/bmp",
         _ => "application/octet-stream",
     }
 }
@@ -409,6 +416,35 @@ fn cache_expose_headers() -> &'static str {
     "Content-Length, Content-Range, Accept-Ranges, X-Listen1-Cache"
 }
 
+/// 响应体是否覆盖了整个资源，因而可以整段落盘。
+///
+/// 没有 Content-Range 就是完整的 200 响应。哔哩哔哩的音频必须原样转发 Range
+/// （见 `should_fetch_full_for_cache`），所以它的首个 `bytes=0-` 请求拿回来的是
+/// `206 bytes 0-<len-1>/<len>`——内容其实是全的。只看「有没有 Content-Range」
+/// 会把哔哩哔哩永久排除在缓存之外，导致断网后这一路完全不可播。
+fn content_range_covers_whole(content_range: Option<&str>) -> bool {
+    let Some(value) = content_range.map(str::trim).filter(|v| !v.is_empty()) else {
+        return true;
+    };
+    let spec = value.strip_prefix("bytes").unwrap_or(value).trim();
+    let Some((range_part, total_part)) = spec.split_once('/') else {
+        return false;
+    };
+    let Ok(total) = total_part.trim().parse::<u64>() else {
+        return false;
+    };
+    let Some((start_raw, end_raw)) = range_part.trim().split_once('-') else {
+        return false;
+    };
+    let (Ok(start), Ok(end)) = (
+        start_raw.trim().parse::<u64>(),
+        end_raw.trim().parse::<u64>(),
+    ) else {
+        return false;
+    };
+    total > 0 && start == 0 && end.saturating_add(1) == total
+}
+
 fn cached_stream_response(url: &str, range: Option<&str>, cache_state: &str, cache_id: Option<&str>) -> Option<StreamResponse> {
     let cached = cache::try_read(url, range, cache_id)?;
     let mut headers = cached.headers;
@@ -422,7 +458,9 @@ fn cached_stream_response(url: &str, range: Option<&str>, cache_state: &str, cac
 }
 
 fn should_cache_stream_response(status: u16, content_type: &str, bytes: &[u8]) -> bool {
-    if status != 200 || bytes.len() < 1024 {
+    // 206 也可能是整段内容（哔哩哔哩必须转发 Range），是否整段由
+    // content_range_covers_whole 判定，这里只排除明显不可缓存的状态码。
+    if !matches!(status, 200 | 206) || bytes.len() < 1024 {
         return false;
     }
 
@@ -456,7 +494,7 @@ fn local_file_stream_response(
     };
 
     let len = file.metadata().map(|m| m.len()).unwrap_or(0);
-    let content_type = audio_content_type(&path);
+    let content_type = local_content_type(&path);
     let range = range_header.and_then(|v| parse_range_header(v, len));
 
     let (status, start, end) = match range {
@@ -657,7 +695,10 @@ fn remote_stream_response(url: &str, range: Option<&str>, no_cache_write: bool, 
             .map(|v| v.to_string());
         let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
 
-        if !no_cache_write && content_range.is_none() && should_cache_stream_response(status, &content_type, &bytes) {
+        if !no_cache_write
+            && content_range_covers_whole(content_range.as_deref())
+            && should_cache_stream_response(status, &content_type, &bytes)
+        {
             cache::write(url, &content_type, &bytes, cache_id);
             // 直接用已持有的字节构造响应，避免写盘后立刻重读整个文件。
             return Ok(full_body_stream_response(status, &content_type, content_range.as_deref(), bytes, "miss"));
@@ -929,7 +970,10 @@ pub async fn handle_stream_protocol(
 
     let bytes = resp.bytes().await.unwrap_or_default().to_vec();
 
-    if !no_cache_write && content_range.is_empty() && should_cache_stream_response(status, &content_type, &bytes) {
+    if !no_cache_write
+        && content_range_covers_whole(Some(content_range.as_str()))
+        && should_cache_stream_response(status, &content_type, &bytes)
+    {
         cache::write(&real_url, &content_type, &bytes, cache_id.as_deref());
         // 直接用已持有的字节构造响应，避免写盘后立刻重读整个文件。
     }
@@ -943,3 +987,67 @@ pub async fn handle_stream_protocol(
     );
     Ok(tauri_response_from_stream_response(response))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        content_range_covers_whole, local_content_type, should_cache_stream_response,
+        should_fetch_full_for_cache,
+    };
+    use std::path::PathBuf;
+
+    #[test]
+    fn serves_local_covers_as_images() {
+        // 内嵌封面落盘后要经本机服务器取，Content-Type 必须是图片，
+        // 否则 <img> 只能靠内容嗅探，行为随 webview 版本漂移。
+        assert_eq!(local_content_type(&PathBuf::from("a/cover.JPG")), "image/jpeg");
+        assert_eq!(local_content_type(&PathBuf::from("a/cover.png")), "image/png");
+        assert_eq!(local_content_type(&PathBuf::from("a/cover.webp")), "image/webp");
+        // 音频映射不能被改坏。
+        assert_eq!(local_content_type(&PathBuf::from("a/song.flac")), "audio/flac");
+        assert_eq!(local_content_type(&PathBuf::from("a/song.mp3")), "audio/mpeg");
+    }
+
+    #[test]
+    fn no_content_range_is_a_whole_body() {
+        assert!(content_range_covers_whole(None));
+        assert!(content_range_covers_whole(Some("")));
+        assert!(content_range_covers_whole(Some("   ")));
+    }
+
+    #[test]
+    fn full_span_206_is_a_whole_body() {
+        // 哔哩哔哩首个 bytes=0- 请求的典型回包。
+        assert!(content_range_covers_whole(Some("bytes 0-5242879/5242880")));
+        assert!(content_range_covers_whole(Some("  bytes  0-1023/1024  ")));
+    }
+
+    #[test]
+    fn partial_span_is_not_a_whole_body() {
+        assert!(!content_range_covers_whole(Some("bytes 0-1023/5242880")));
+        assert!(!content_range_covers_whole(Some("bytes 1024-5242879/5242880")));
+        assert!(!content_range_covers_whole(Some("bytes 0-1023/*")));
+        assert!(!content_range_covers_whole(Some("bytes */5242880")));
+        assert!(!content_range_covers_whole(Some("garbage")));
+        assert!(!content_range_covers_whole(Some("bytes 0-0/0")));
+    }
+
+    #[test]
+    fn partial_content_status_is_cacheable() {
+        let body = vec![7u8; 2048];
+        assert!(should_cache_stream_response(206, "audio/mp4", &body));
+        assert!(should_cache_stream_response(200, "audio/mpeg", &body));
+        assert!(!should_cache_stream_response(302, "audio/mpeg", &body));
+        assert!(!should_cache_stream_response(200, "audio/mpeg", &body[..512]));
+        assert!(!should_cache_stream_response(200, "application/json", &body));
+    }
+
+    #[test]
+    fn bilibili_hosts_keep_forwarding_range() {
+        assert!(!should_fetch_full_for_cache(
+            "https://cn-hk-eq-01.bilivideo.com/upgcxcode/x.m4s?deadline=1"
+        ));
+        assert!(should_fetch_full_for_cache("https://m701.music.126.net/x.mp3"));
+    }
+}
+

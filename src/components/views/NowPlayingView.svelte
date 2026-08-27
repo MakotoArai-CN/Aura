@@ -11,9 +11,15 @@
   let {
     visible = false,
     onClose = () => {},
+    windowControlsRevealed = false,
+    windowControlsEl = null,
   }: {
     visible?: boolean;
     onClose?: () => void;
+    /** 展开态那三个窗口按钮是否已经翻下来。翻下来时右上角这排控件要让位。 */
+    windowControlsRevealed?: boolean;
+    /** 那三个按钮的 DOM，用来判断横向区间是否真的和这排控件相交。 */
+    windowControlsEl?: HTMLElement | null;
   } = $props();
 
   let lyricLines = $state<LyricLine[]>([]);
@@ -21,6 +27,28 @@
   let lastTrackId = $state("");
   let lastLyricSignature = $state("");
   let lyricEl = $state<HTMLElement | null>(null);
+  let variantTogglesEl = $state<HTMLElement | null>(null);
+  // 只有那三个按钮和这排控件真的相交时才让位。窗口够宽时歌词列的右边缘远在按钮
+  // 左侧（X 不重叠），窄布局下歌词整块被挤到下半屏（Y 不重叠），这两种情况下移都是白费。
+  let variantTogglesPushed = $state(false);
+  $effect(() => {
+    if (!windowControlsRevealed || !variantTogglesEl || !windowControlsEl) {
+      variantTogglesPushed = false;
+      return;
+    }
+    const toggles = variantTogglesEl.getBoundingClientRect();
+    // 用布局盒（offsetTop/offsetLeft + offsetWidth/offsetHeight）而不是
+    // getBoundingClientRect：按钮此刻正带着 rotateX + perspective，量出来的可视矩形
+    // 被投影压过（翻起时高度直接是 0），区间不可信。布局盒不受 transform 影响，
+    // 父级 .wc-flyout 自身没有 transform，可以直接叠上它的位置。
+    const parent = (windowControlsEl.offsetParent as HTMLElement | null)?.getBoundingClientRect();
+    const left = (parent?.left ?? 0) + windowControlsEl.offsetLeft;
+    const top = (parent?.top ?? 0) + windowControlsEl.offsetTop;
+    const right = left + windowControlsEl.offsetWidth;
+    const bottom = top + windowControlsEl.offsetHeight;
+    variantTogglesPushed =
+      toggles.left < right && left < toggles.right && toggles.top < bottom && top < toggles.bottom;
+  });
   let showQueue = $state(false);
   let translationIndex = $state(0);
   let lyricUserActiveUntil = 0;
@@ -237,7 +265,7 @@
         role="region"
         aria-label="歌词"
       >
-        <div class="variant-toggles" aria-label="歌词译文和音标">
+        <div class="variant-toggles" class:pushed-down={variantTogglesPushed} bind:this={variantTogglesEl} aria-label="歌词译文和音标">
           <div class="offset-adjust" title="歌词进度微调（提前/延后）">
             <button type="button" class="offset-btn" aria-label="歌词延后 100ms" onclick={() => adjustOffset(-100)}>−</button>
             <span class="offset-value">{offsetLabel}</span>
@@ -489,6 +517,20 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    /* 时长和曲线跟 .wc-flyout-inner 的翻转对齐，让让位和翻下来看着是同一个动作 */
+    transition: transform 340ms cubic-bezier(0.22, 0.9, 0.24, 1);
+  }
+
+  /* 三个窗口按钮翻下来时会盖住这一排（band 54px 高，这排原本在 y≈19..47），
+     整体下移让开；按钮翻回去就自动滑回原位。 */
+  .variant-toggles.pushed-down {
+    transform: translateY(34px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .variant-toggles {
+      transition: none;
+    }
   }
 
   .offset-adjust {

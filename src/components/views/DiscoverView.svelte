@@ -300,7 +300,7 @@
     top: 12px;
     height: 100%;
     width: 100%;
-    filter: blur(16px) opacity(0.6);
+    filter: var(--visual-hero-shadow);
     transform: scale(0.92, 0.96);
     z-index: 0;
     background-size: cover;
@@ -341,8 +341,9 @@
     align-items: center;
     justify-content: center;
     color: #fff;
-    backdrop-filter: blur(8px);
-    background: hsla(0, 0%, 100%, 0.14);
+    backdrop-filter: var(--visual-badge-backdrop);
+    -webkit-backdrop-filter: var(--visual-badge-backdrop);
+    background: var(--visual-badge-bg);
     border: 1px solid hsla(0, 0%, 100%, 0.08);
     height: 22%;
     width: 22%;

@@ -206,6 +206,125 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+const AUDIO_EXT_RE = /\.(mp3|flac|ogg|oga|opus|wav|aiff?|m4a|mp4|aac|webm)$/i;
+const LOCAL_META_SEARCH_TIMEOUT_MS = 8000;
+/** 一首本地歌的联网补全同一时刻只跑一次：三个视图都会调 getLyric，不去重就是三倍请求。 */
+const localMetaInFlight = new Map<string, Promise<string>>();
+
+/**
+ * 把本地文件名整理成可用于搜索的「曲名 + 歌手」。
+ *
+ * 文件里读不到标签时，标题就是文件名，通常长成「03. 周杰伦 - 晴天.flac」这样，
+ * 直接拿去搜基本搜不到。这里去掉扩展名、开头的曲目序号，并在歌手为空时尝试按
+ * 破折号拆一次。拆错方向（曲名在前）由调用方再反着匹配一遍兜住。
+ */
+function localSearchTarget(track: Track): { title: string; artist: string } {
+  let title = (track.title ?? "")
+    .replace(AUDIO_EXT_RE, "")
+    .replace(/^\s*\d{1,3}[\s._-]+/, "")
+    .replace(/_+/g, " ")
+    .trim();
+  let artist = (track.artist ?? "").trim();
+  if (!artist) {
+    const parts = title.split(/\s+-\s+|\s+—\s+/);
+    if (parts.length === 2 && parts[0] && parts[1]) {
+      artist = parts[0].trim();
+      title = parts[1].trim();
+    }
+  }
+  return { title, artist };
+}
+
+type OnlineLocalMeta = { img_url: string; artist: string; album: string; lyric: string };
+
+/**
+ * 从用户配置的换源列表里找同名曲，补齐本地歌缺的封面/歌手/歌词。
+ * 逐个源串行试，命中就停——这是「什么都读不到」时的兜底，不值得为它并发打一圈请求。
+ */
+async function resolveOnlineLocalMeta(
+  target: { title: string; artist: string },
+  needLyric: boolean
+): Promise<OnlineLocalMeta | null> {
+  if (!target.title) return null;
+  const keyword = `${target.title} ${target.artist}`.trim();
+  const swapped = { title: target.artist, artist: target.title };
+
+  for (const sourceName of getAutoChooseSourceList()) {
+    const provider = PROVIDERS[sourceName];
+    const data = await withTimeout(
+      provider.search(`/search?keywords=${encodeURIComponent(keyword)}&curpage=1&type=0`),
+      LOCAL_META_SEARCH_TIMEOUT_MS,
+      `[MediaService] ${sourceName} local meta search`
+    ).catch(() => null);
+    if (!data) continue;
+
+    const match =
+      data.result.find((candidate) => isLikelySameTrack(candidate, target)) ??
+      (target.artist ? data.result.find((candidate) => isLikelySameTrack(candidate, swapped)) : undefined);
+    if (!match) continue;
+
+    let lyric = "";
+    if (needLyric) {
+      const result = await provider
+        .lyric(`/lyric?${qs({ track_id: match.id, album_id: match.album_id ?? "" })}`)
+        .catch(() => null);
+      lyric = normalizeLyricText((result as { lyric?: unknown } | null)?.lyric);
+    }
+    if (!match.img_url && !lyric) continue;
+    return {
+      img_url: match.img_url ?? "",
+      artist: match.artist ?? "",
+      album: match.album ?? "",
+      lyric,
+    };
+  }
+  return null;
+}
+
+/**
+ * 本地歌的联网兜底。返回联网拿到的歌词（没拿到就是空串），封面/歌手直接写回歌单。
+ *
+ * 触发条件严格限定为「文件本身读不到」：内嵌标签有的字段一律优先，绝不覆盖。
+ * 每首歌只试一次（成功与否都记时间戳），断网时不记，等恢复后还有机会。
+ */
+async function enrichLocalTrackMeta(trackId: string, embeddedLyric: string): Promise<string> {
+  const stored = localmusic.getStoredTrack(trackId) as (Track & { online_meta_at?: number }) | null;
+  if (!stored || stored.online_meta_at) return "";
+  if (typeof navigator !== "undefined" && navigator.onLine === false) return "";
+
+  const needLyric = !embeddedLyric.trim();
+  const needCover = !stored.img_url;
+  const needArtist = !stored.artist;
+  if (!needLyric && !needCover && !needArtist) return "";
+
+  const inFlight = localMetaInFlight.get(trackId);
+  if (inFlight) return inFlight;
+
+  const task = (async () => {
+    const target = localSearchTarget(stored);
+    const online = await resolveOnlineLocalMeta(target, needLyric).catch(() => null);
+    const patch: Partial<Track> & { online_meta_at: number } = { online_meta_at: Date.now() };
+    if (online) {
+      if (needCover && online.img_url) patch.img_url = online.img_url;
+      if (needArtist && online.artist) {
+        patch.artist = online.artist;
+        patch.artist_id = `lmartist_${online.artist}`;
+      }
+      if (!stored.album && online.album) patch.album = online.album;
+      // 歌词也要落存储。online_meta_at 一旦写上就不会再联网，不存下来的话
+      // 这首歌下次播放就又没歌词了（文件里本来就没有，localmusic.lyric() 会回退到
+      // track.lyric）。
+      if (needLyric && online.lyric) patch.lyric = online.lyric;
+    }
+    localmusic.applyMetaPatch(trackId, patch);
+    return online?.lyric ?? "";
+  })().finally(() => localMetaInFlight.delete(trackId));
+
+  localMetaInFlight.set(trackId, task);
+  return task;
+}
+
+
 function getDefaultPlaylistFilterId(source: ProviderName): string {
   const group = PROVIDERS[source].get_playlist_filters()[0];
   return group?.items?.[0]?.id ?? "";
@@ -392,10 +511,16 @@ export const MediaService = {
     const info = getProviderByItemId(trackId);
     if (!info) return { lyric: "", tlyric: "" };
     const result = await info.provider.lyric(`/lyric?${qs({ track_id: trackId, album_id: albumId ?? "", lyric_url: lyricUrl ?? "", tlyric_url: tlyricUrl ?? "" })}`);
-    return {
-      lyric: normalizeLyricText((result as { lyric?: unknown }).lyric),
-      tlyric: normalizeLyricText((result as { tlyric?: unknown }).tlyric),
-    };
+    const lyric = normalizeLyricText((result as { lyric?: unknown }).lyric);
+    const tlyric = normalizeLyricText((result as { tlyric?: unknown }).tlyric);
+
+    // 本地歌：文件里没有歌词（或还缺封面/歌手）时联网补一次。放在这里是因为
+    // 播放一首歌必然会走 getLyric，不用再往播放器里塞一条触发链路。
+    if (info.name === "localmusic") {
+      const onlineLyric = await enrichLocalTrackMeta(trackId, lyric).catch(() => "");
+      if (!lyric && onlineLyric) return { lyric: onlineLyric, tlyric };
+    }
+    return { lyric, tlyric };
   },
 
   // Core: bootstrap with auto-failover across platforms

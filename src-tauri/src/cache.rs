@@ -76,7 +76,8 @@ fn default_category() -> String {
     "warm".to_string()
 }
 
-fn user_home_dir() -> PathBuf {
+/// 用户主目录。device_tier 也要用它来放效果档位覆盖文件，所以是 crate 可见。
+pub(crate) fn user_home_dir() -> PathBuf {
     #[cfg(windows)]
     {
         if let Ok(home) = std::env::var("USERPROFILE") {
@@ -426,6 +427,42 @@ fn cleanup_index(dir: &Path, index: &mut CacheIndex, max_bytes: u64) {
 #[tauri::command]
 pub fn default_cache_dir() -> String {
     default_cache_dir_path().to_string_lossy().to_string()
+}
+
+/// 离线播放探测：给定稳定缓存键（平台:歌曲ID），返回已落盘音频的绝对路径。
+/// 断网时前端拿不到新的播放地址，改用这里返回的本地文件直接播放。
+#[tauri::command]
+pub fn audio_cache_lookup(cache_id: String) -> Option<String> {
+    let trimmed = cache_id.trim();
+    if trimmed.is_empty() || !active_config().enabled {
+        return None;
+    }
+
+    let dir = active_cache_dir();
+    let key = cache_key_for(Some(trimmed), "");
+    let mut mem_guard = load_memory_index(&dir);
+    let (size, file_name) = mem_guard
+        .as_ref()?
+        .index
+        .entries
+        .get(&key)
+        .map(|entry| (entry.size, entry.file_name.clone()))?;
+    if size == 0 {
+        return None;
+    }
+
+    let path = dir.join(&file_name);
+    if !path.exists() {
+        // 索引与磁盘不一致：清掉这条，免得每次都白探测一遍。
+        if let Some(mem) = mem_guard.as_mut() {
+            mem.index.entries.remove(&key);
+            mem.hits_dirty = true;
+        }
+        persist_if_dirty(&mut mem_guard);
+        return None;
+    }
+
+    Some(path.to_string_lossy().to_string())
 }
 
 #[tauri::command]

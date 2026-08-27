@@ -1,7 +1,7 @@
 <script lang="ts">
   import { playerState, progressPercent, positionFormatted, durationFormatted } from "../../lib/stores/player";
   import { player } from "../../lib/player";
-  import { settings } from "../../lib/stores/settings";
+  import { settings, resolvedTheme } from "../../lib/stores/settings";
   import { deviceTier } from "../../lib/stores/device";
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
   import { sizedImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
@@ -10,6 +10,7 @@
   import { openExternalUrl } from "../../lib/tauri";
   import LiquidGlassSurface from "../effects/LiquidGlassSurface.svelte";
   import NowPlayingView from "../views/NowPlayingView.svelte";
+  import WindowControls from "./WindowControls.svelte";
   import { fade, fly } from "svelte/transition";
   import { getLyricsVariantAvailability, getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, parseLyric, type LyricLine, type LyricVariantMode } from "../../lib/lyrics";
 
@@ -58,20 +59,30 @@
     return `--cover-accent-rgb:${r},${g},${b};--cover-accent:rgb(${r} ${g} ${b});`;
   });
   let footerMainEl = $state<HTMLElement | null>(null);
+  // 玻璃表面只在 high / ultra 档 + 液态玻璃主题下启用。现在走原生 backdrop-filter，
+  // 没有 DOM 克隆也没有逐帧同步，因此播放中也可以常开（旧实现必须暂停时才敢开）。
   let glassSurfaceEnabled = $derived(
-    $deviceTier === "high" &&
-    $settings.theme === "liquidGlass" &&
+    ($deviceTier === "high" || $deviceTier === "ultra") &&
+    $resolvedTheme === "liquidGlass" &&
     !isNowPlaying &&
-    Boolean($playerState.currentTrack) &&
-    !$playerState.playing
+    Boolean($playerState.currentTrack)
   );
-  // 相邻封面仅在切换动画的 240ms 内挂载，平时不驻留解码位图。
-  let showAdjacentCovers = $state(false);
+  // 相邻封面常驻显示；只有最低档才省掉这两张解码位图。
+  let showAdjacentCovers = $derived($deviceTier !== "low");
   // 播放页首次打开前不挂载（隐藏的完整歌词 DOM 常驻内存无意义），打开过一次后保持挂载以保留滑出动画。
   let nowPlayingEverOpened = $state(false);
   $effect(() => {
     if (nowPlayingOpen) nowPlayingEverOpened = true;
   });
+  // 三个窗口按钮翻下来时会盖住歌词区右上角的进度微调/翻译按钮，翻出期间让那一排
+  // 整体下移躲开。用 state 而不是纯 CSS：那两个按钮在 NowPlayingView 里，而
+  // NowPlayingView 是 .wc-flyout 的前置兄弟节点的子节点，选择器够不到。
+  let wcRevealed = $state(false);
+  // 实际那三个按钮的 DOM。让位与否要按真实横向区间判断，不能按 220px 的命中带算。
+  let wcInnerEl = $state<HTMLElement | null>(null);
+  // 收起播放页时 .wc-flyout 直接从 DOM 移除，pointerleave 不一定发得出来，
+  // 所以这里再兜一层，避免下次展开时那一排还停在下移位置。
+  let wcButtonsRevealed = $derived(isNowPlaying && wcRevealed);
   let prevCoverUrl = $derived.by(() => {
     if (!showAdjacentCovers) return "";
     const list = $playerState.playlist;
@@ -444,18 +455,15 @@
       return index === expectedPrev ? "prev" : "next";
     })();
     coverSwitchDirection = "";
-    showAdjacentCovers = true;
     const frame = window.requestAnimationFrame(() => {
       coverSwitchDirection = direction;
     });
     const timer = window.setTimeout(() => {
       coverSwitchDirection = "";
-      showAdjacentCovers = false;
     }, 240);
     return () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(timer);
-      showAdjacentCovers = false;
     };
   });
 </script>
@@ -467,15 +475,32 @@
   class:adaptive={$settings.enableCoverAdaptiveTheme && adaptiveAccent}
   style={coverAccentStyle}
 >
-  <div class="footer-main" class:slidedown={isNowPlaying} bind:this={footerMainEl}>
-    <LiquidGlassSurface
-      target={footerMainEl}
-      enabled={glassSurfaceEnabled}
-      variant="liquid"
-      backgroundSelector="#listen1-glass-scene"
-    />
+  <div
+    class="footer-main"
+    class:slidedown={isNowPlaying}
+    class:glass-surface={glassSurfaceEnabled}
+    bind:this={footerMainEl}
+  >
+    <LiquidGlassSurface target={footerMainEl} enabled={glassSurfaceEnabled} />
     {#if nowPlayingEverOpened}
-      <NowPlayingView visible={nowPlayingOpen} onClose={onCloseNowPlaying} />
+      <NowPlayingView visible={nowPlayingOpen} onClose={onCloseNowPlaying} windowControlsRevealed={wcButtonsRevealed} windowControlsEl={wcInnerEl} />
+    {/if}
+
+    {#if isNowPlaying}
+      <!-- 展开后整块盖住标题栏，窗口控件在这里补一份，否则最小化/关闭都点不到 -->
+      <div
+        class="wc-flyout"
+        role="group"
+        aria-label="窗口控件"
+        onpointerenter={() => (wcRevealed = true)}
+        onpointerleave={() => (wcRevealed = false)}
+        onfocusin={() => (wcRevealed = true)}
+        onfocusout={() => (wcRevealed = false)}
+      >
+        <div class="wc-flyout-inner" bind:this={wcInnerEl}>
+          <WindowControls />
+        </div>
+      </div>
     {/if}
 
     <div class="footerwrap" class:switch-next={coverSwitchDirection === "next"} class:switch-prev={coverSwitchDirection === "prev"}>
@@ -629,9 +654,8 @@
                 aria-valuemax="100"
               >
                 <div class="barbg">
-                  <div class="cur" style="clip-path: inset(0 {100 - $playerState.volume}% 0 0)"></div>
-                  <span class="btn" style="left:{$playerState.volume}%"><i></i></span>
-                </div>
+                  <div class="cur" style="clip-path: inset(0 {100 - displayedProgress}% 0 0)"></div>
+                  <span class="btn" style="left:{displayedProgress}%"><i></i></span>
                 </div>
               </div>
             </div>
@@ -663,12 +687,13 @@
                 aria-valuenow={$playerState.muted ? 0 : $playerState.volume}
               >
                 <div class="barbg">
-                  <div class="cur" style="clip-path: inset(0 {100 - (isDragging ? dragPercent : $progressPercent)}% 0 0)"></div>
-                  <span class="btn" style="left:{isDragging ? dragPercent : $progressPercent}%"><i></i></span>
+                  <div class="cur" style="clip-path: inset(0 {100 - $playerState.volume}% 0 0)"></div>
+                  <span class="btn" style="left:{$playerState.volume}%"><i></i></span>
                 </div>
               </div>
             </div>
-            <div class="timeswitch">
+          </div>
+          <div class="timeswitch">
             <span class="current">{$positionFormatted}</span>
             <span style="font-weight:700"> / </span>
             <span class="total">{$durationFormatted}</span>
@@ -899,6 +924,15 @@
     border-top: solid 1px var(--line-default-color);
   }
 
+  /* 液态玻璃表面接管时，footer 自己必须停掉 backdrop-filter：
+     带 backdrop-filter 的元素会成为 backdrop root，子层就只能采到 footer 自身，
+     采不到页面；底色也一并让给玻璃层，否则等于模糊两遍。 */
+  .footer-main.glass-surface {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background-color: transparent;
+  }
+
   .footer-main::before {
     content: "";
     position: absolute;
@@ -940,6 +974,77 @@
     margin: 0;
     transform: none;
     z-index: 320;
+  }
+
+  /* ── 展开态的悬浮窗口控件 ──────────────────────────────
+     展开后 .footer 是 z-index:320 的全屏层，把 .navigation（z-index:100）连同三个
+     窗口按钮一起盖住、点都点不到，所以在播放器内部再挂一份。
+     收起姿态：以顶边为铰链、朝屏幕里侧向上翻起 90°，等于贴着窗口顶边收平。
+     命中区默认只有一条 10px 高的窄带，免得吞掉展开态本该收到的点击；指针一划入就
+     长到能容纳翻下来的按钮，这样停在按钮上时 :hover 不会断掉又把它翻回去。 */
+  .wc-flyout {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 220px;
+    height: 10px;
+    /* 必须压过同级的 .songdetail-wrapper（z-index:100，定义在 NowPlayingView.svelte）。
+       低于它时整条命中带都被歌曲详情盖住，hover 进不来，按钮量出来是 36×0、点击超时，
+       而 TitleBar 那份又被 .footer(320) 盖着 —— 展开态就彻底没有可用的窗口控件了。 */
+    z-index: 120;
+    /* 透视必须给在命中区（父级）上，否则 rotateX 只是把按钮垂直压扁，没有铰链感 */
+    perspective: 620px;
+    perspective-origin: top center;
+  }
+
+  .wc-flyout:hover {
+    height: 54px;
+  }
+
+  .wc-flyout-inner {
+    position: absolute;
+    top: 0;
+    right: 10px;
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 5px;
+    transform-origin: top center;
+    transform: rotateX(-90deg);
+    opacity: 0;
+    pointer-events: none;
+    /* 收起时先转、快到 90° 才淡出，避免翻到一半就凭空消失 */
+    transition:
+      transform 320ms cubic-bezier(0.32, 0.72, 0.24, 1),
+      opacity 110ms linear 210ms;
+  }
+
+  .wc-flyout:hover .wc-flyout-inner {
+    transform: rotateX(0deg);
+    opacity: 1;
+    pointer-events: auto;
+    /* 翻出时反过来：立刻可见，再补完剩下的转动 */
+    transition:
+      transform 340ms cubic-bezier(0.22, 0.9, 0.24, 1),
+      opacity 90ms linear;
+  }
+
+  /* 最低档不做三维翻转，退化成纯透明度切换 */
+  :global(.wrap[data-visual="low"]) .wc-flyout {
+    perspective: none;
+  }
+
+  :global(.wrap[data-visual="low"]) .wc-flyout-inner,
+  :global(.wrap[data-visual="low"]) .wc-flyout:hover .wc-flyout-inner {
+    transform: none;
+    transition: opacity 120ms linear;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .wc-flyout-inner,
+    .wc-flyout:hover .wc-flyout-inner {
+      transform: none;
+      transition: opacity 100ms linear;
+    }
   }
 
   :global(.wrap[data-theme="liquid-glass"]) .footer-main:not(.slidedown) {
@@ -1432,8 +1537,9 @@
     height: 100%;
     width: 100%;
     background: var(--footer-player-bar-cur-background-color);
-    /* clip-path 替代 width：进度更新不再触发布局，仅重绘该层 */
-    will-change: clip-path;
+    /* clip-path 替代 width：进度更新不再触发布局，仅重绘该层。
+       图层提升只在 high 档开启（mid/low 下常驻提升的显存不值这点收益） */
+    will-change: var(--visual-will-change);
   }
 
   .barbg .btn {

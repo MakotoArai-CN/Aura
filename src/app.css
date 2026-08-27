@@ -311,6 +311,31 @@
   --nav-backdrop-filter: saturate(160%) blur(12px);
   --player-backdrop-filter: none;
 
+  /* 全局交互控件的液态玻璃（规则见文件末尾「Liquid glass · 全局交互控件」）。
+     --lg-ctl-tint 是 rgb 三元组，有颜色的按钮通过覆盖它得到「有颜色的液态玻璃」。 */
+  --lg-ctl-blur:   saturate(180%) blur(10px);
+  --lg-ctl-border: rgba(255, 255, 255, 0.74);
+  --lg-ctl-border-hover: rgba(255, 255, 255, 0.94);
+  --lg-ctl-bg: linear-gradient(158deg,
+    rgba(255, 255, 255, 0.66) 0%,
+    rgba(255, 255, 255, 0.24) 46%,
+    rgba(226, 240, 250, 0.46) 100%);
+  --lg-ctl-bg-hover: linear-gradient(158deg,
+    rgba(255, 255, 255, 0.86) 0%,
+    rgba(255, 255, 255, 0.42) 46%,
+    rgba(232, 245, 253, 0.62) 100%);
+  --lg-ctl-shadow:
+    0 1px 2px rgba(58, 82, 99, 0.10),
+    0 6px 16px rgba(58, 82, 99, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.30);
+  --lg-ctl-shadow-hover:
+    0 2px 4px rgba(58, 82, 99, 0.12),
+    0 12px 26px rgba(58, 82, 99, 0.16),
+    inset 0 1px 0 rgba(255, 255, 255, 0.98),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.40);
+  --lg-ctl-tint: 47, 156, 255;
+
   --shadow:       0 18px 44px rgba(58, 82, 99, 0.18), inset 0 1px 0 rgba(255,255,255,0.65);
   --shadow-sm:    0 4px 14px rgba(58, 82, 99, 0.12);
   --shadow-lift:  0 24px 54px rgba(58, 82, 99, 0.22), inset 0 1px 0 rgba(255,255,255,0.72);
@@ -341,12 +366,6 @@
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   --safe-left: env(safe-area-inset-left, 0px);
   --transition:       var(--dur-med) var(--ease-out-quart);
-  --immersive-player-accent: #00f5d4;
-  --immersive-player-accent-rgb: 0, 245, 212;
-  --immersive-player-panel-bg: rgba(0, 0, 0, 0.10);
-  --immersive-player-panel-shadow: inset 0 0 2px 1px rgba(255,255,255,.35), inset 0 0 10px 4px rgba(255,255,255,.15), 0 4px 16px rgba(17,17,26,.05), 0 8px 24px rgba(17,17,26,.05), 0 16px 56px rgba(17,17,26,.05), inset 0 4px 16px rgba(17,17,26,.05), inset 0 8px 24px rgba(17,17,26,.05), inset 0 16px 56px rgba(17,17,26,.05);
-  --immersive-player-button-shadow: inset 0 0 2px 1px rgba(255,255,255,.34), inset 0 0 10px 4px rgba(255,255,255,.13), 0 10px 30px rgba(0,0,0,.18);
-  --immersive-player-button-hover-shadow: inset 0 0 2px 1px rgba(255,255,255,.42), inset 0 0 12px 5px rgba(255,255,255,.17), 0 12px 34px rgba(0,0,0,.22), 0 0 18px rgba(0,245,212,.10);
   font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, STHeiti, sans-serif;
   font-size: var(--text-default-size);
   line-height: 1.5;
@@ -354,28 +373,85 @@
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
 
-  /* ─── 设备分级视觉变量（由 App.svelte 挂载时按 Rust 检测结果设置 data-visual）───
-     mid（高性能 CPU 无独显，软件渲染）与 low（中低端 CPU，纯色 UI）默认禁用
-     常驻模糊合成；high（高性能 CPU + 独显）恢复完整毛玻璃与模糊背景。 */
+  /* ─── 设备分级视觉变量（App.svelte 挂载时按有效档位写入 data-visual）───
+     ultra — 仅手动可选：在 high 之上再加折射与模糊强度，自动检测永远不会选它。
+     high  — 高性能 CPU + 独显：GPU 加速，视觉效果与 GitHub 原版完全一致。
+     mid   — 高性能 CPU 无独显：软件渲染，砍掉常驻模糊合成，交互动效全部保留。
+     low   — 中低端设备：纯色 UI，模糊、透明合成与图层提升全部关闭。
+     :root 下的默认值即 mid 档，也是检测失败时最安全的回退。 */
   --visual-backdrop: none;
   --visual-cover-bg-filter: none;
   --visual-cover-shadow-filter: none;
+  --visual-hero-shadow: blur(10px) opacity(0.5);
+  --visual-badge-backdrop: none;
+  --visual-badge-bg: hsla(0, 0%, 100%, 0.26);
+  --visual-overlay-backdrop: none;
+  --visual-ripple-blur: none;
+  --visual-will-change: auto;
   --footer-surface-alpha: 88%;
 }
 
-.wrap[data-visual="high"] {
+/* high：恢复 GitHub 原版完整视觉——底栏毛玻璃、封面模糊背景、浮层折射。
+   ultra 共用这一整套作为基线，下面再单独加码。 */
+.wrap:is([data-visual="high"], [data-visual="ultra"]) {
   --visual-backdrop: saturate(180%) blur(20px);
   --visual-cover-bg-filter: blur(72px) contrast(82%) brightness(132%);
   --visual-cover-shadow-filter: blur(16px) opacity(0.6);
+  --visual-hero-shadow: blur(16px) opacity(0.6);
+  --visual-badge-backdrop: blur(8px);
+  --visual-badge-bg: hsla(0, 0%, 100%, 0.14);
+  --visual-overlay-backdrop: blur(10px);
+  --visual-ripple-blur: blur(10px);
+  --visual-will-change: clip-path;
+  --footer-surface-alpha: 100%;
 }
 
+/* ultra：只有用户手动选才会到这一档，所以敢往上加——模糊半径、饱和度、阴影
+   全部拉满。自动检测最高只到 high（最高档必须和 GitHub 原版性能一致），
+   这一档的开销不在自动策略的承诺范围内。 */
+.wrap[data-visual="ultra"] {
+  --visual-backdrop: saturate(200%) blur(28px);
+  --visual-cover-bg-filter: blur(96px) contrast(78%) brightness(138%) saturate(140%);
+  --visual-cover-shadow-filter: blur(22px) opacity(0.68);
+  --visual-hero-shadow: blur(22px) opacity(0.68);
+  --visual-badge-backdrop: blur(14px) saturate(160%);
+  --visual-overlay-backdrop: blur(16px) saturate(150%);
+  --visual-ripple-blur: blur(14px);
+}
+
+/* mid：交互动效（过渡、悬浮、位移）一个不少，只去掉常驻离屏模糊纹理 */
 .wrap[data-visual="mid"] {
   --visual-cover-bg-filter: blur(48px) contrast(82%) brightness(132%);
   --visual-cover-shadow-filter: blur(10px) opacity(0.5);
+  --glass-blur: none;
+  --nav-backdrop-filter: none;
 }
 
+/* low：只保留基础功能——纯色底、无模糊、无图层提升、阴影收敛 */
 .wrap[data-visual="low"] {
+  --visual-hero-shadow: none;
+  --visual-badge-bg: rgba(0, 0, 0, 0.42);
   --footer-surface-alpha: 100%;
+  --glass-blur: none;
+  --nav-backdrop-filter: none;
+  --shadow: 0 2px 8px rgba(0, 0, 0, 0.22);
+  --shadow-sm: 0 1px 4px rgba(0, 0, 0, 0.18);
+  --shadow-lift: 0 4px 12px rgba(0, 0, 0, 0.28);
+}
+
+/* 液态玻璃主题在 mid/low 下没有模糊可用，浮层只能靠不透明度保证文字可读 */
+.wrap[data-theme="liquid-glass"]:is([data-visual="mid"], [data-visual="low"]) {
+  --glass-bg: rgba(248, 252, 255, 0.94);
+  --dialog-background-color: rgba(248, 252, 255, 0.96);
+  --lg-ctl-blur: none;
+  --lg-ctl-bg: rgba(255, 255, 255, 0.88);
+  --lg-ctl-bg-hover: rgba(255, 255, 255, 0.98);
+}
+
+/* low 档连描边高光都省掉，只留 1px 边框，避免每个按钮一层合成层 */
+.wrap[data-theme="liquid-glass"][data-visual="low"] {
+  --lg-ctl-shadow: none;
+  --lg-ctl-shadow-hover: none;
 }
 
 html, body { height: 100%; width: 100%; overflow: hidden; background: transparent; }
@@ -489,6 +565,173 @@ input, select, textarea { font: inherit; color: inherit; }
   animation: shimmer 1.6s var(--ease-soft) infinite;
 }
 
+/* ═══════════════════════════════════════════════════
+   Liquid glass · 全局交互控件
+   仅「流光玻璃」主题生效。选择器重复一次 [data-theme] 把权重抬到 0,4,0，
+   压过组件内 scoped 样式（scoped 选择器最多 0,3,0），避免逐个组件改样式。
+   刻意排除：.wc-btn（窗口控件需贴边）、.thumb-button（包着封面图）、
+   .dismiss / .menu-item（已在 Toast / 菜单玻璃面内，再嵌一层会糊）、
+   .sidebar-nav-btn（all:unset 的透明包裹层、没有圆角，玻璃面画在它上面
+   会变成直角方块；侧栏行的玻璃单独写在下面的 .sidebar-block 上）。
+   ═══════════════════════════════════════════════════ */
+.wrap[data-theme="liquid-glass"][data-theme] :is(
+  .action-btn, .icon-btn, .mini-action, .chip, .filter-tag,
+  .key-chip, .key-add, .dialog-btn, .offset-btn,
+  .btn-load-more, .btn-pagination, .search-btn, .search-action-btn,
+  .update-btn, .empty-add-button, .remove-all, .sidebar-remove-btn,
+  .sidebar-icon-btn, .zoom-reset, .add-menu-new, .theme-card,
+  .source-button, .playlist-button,
+  .lyric-toggle, .translate-switch
+) {
+  background: var(--lg-ctl-bg);
+  border: 1px solid var(--lg-ctl-border);
+  -webkit-backdrop-filter: var(--lg-ctl-blur);
+  backdrop-filter: var(--lg-ctl-blur);
+  box-shadow: var(--lg-ctl-shadow);
+  color: var(--text-default-color);
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    border-color var(--dur-fast) var(--ease-soft),
+    box-shadow var(--dur-fast) var(--ease-soft),
+    transform var(--dur-fast) var(--ease-soft);
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] :is(
+  .action-btn, .icon-btn, .mini-action, .chip, .filter-tag,
+  .key-chip, .key-add, .dialog-btn, .offset-btn,
+  .btn-load-more, .btn-pagination, .search-btn, .search-action-btn,
+  .update-btn, .empty-add-button, .remove-all, .sidebar-remove-btn,
+  .sidebar-icon-btn, .zoom-reset, .add-menu-new, .theme-card,
+  .source-button, .playlist-button,
+  .lyric-toggle, .translate-switch
+):hover:not(:disabled):not([aria-disabled="true"]) {
+  background: var(--lg-ctl-bg-hover);
+  border-color: var(--lg-ctl-border-hover);
+  box-shadow: var(--lg-ctl-shadow-hover);
+}
+
+/* 侧栏图标按钮自身 padding:0 且没有圆角，套上玻璃面会紧贴图标画出一个直角方块。 */
+.wrap[data-theme="liquid-glass"][data-theme] .sidebar-icon-btn {
+  border-radius: var(--radius-sm);
+  padding: 3px;
+}
+
+/* ── 侧栏导航行 ────────────────────────────────────
+   圆角与背景都在内层 .sidebar-block 上，所以玻璃面也画在它上面。
+   hover / 选中都不能推到接近纯白：选中行原本是白色文字，白底白字看不清。
+   这里统一改成「带青色染色的玻璃 + 深色文字」，对比度由文字色保证。
+   阴影走 --lg-ctl-shadow* 令牌，最低档自动变 none。 */
+.wrap[data-theme="liquid-glass"][data-theme] ul li .sidebar-block {
+  border-radius: var(--default-border-radius);
+  transition:
+    background var(--dur-fast) var(--ease-soft),
+    box-shadow var(--dur-fast) var(--ease-soft),
+    color var(--dur-fast) var(--ease-soft);
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] ul li:hover .sidebar-block,
+.wrap[data-theme="liquid-glass"][data-theme] ul li:hover .sidebar-block.opensidebar {
+  background: var(--lg-ctl-bg);
+  color: var(--text-default-color);
+  box-shadow: var(--lg-ctl-shadow);
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] ul li.active .sidebar-block,
+.wrap[data-theme="liquid-glass"][data-theme] ul li.active .sidebar-block.opensidebar,
+.wrap[data-theme="liquid-glass"][data-theme] ul li.active:hover .sidebar-block,
+.wrap[data-theme="liquid-glass"][data-theme] ul li.active:hover .sidebar-block.opensidebar {
+  background:
+    linear-gradient(158deg,
+      rgba(255, 255, 255, 0.44) 0%,
+      rgba(255, 255, 255, 0.10) 40%,
+      transparent 66%),
+    linear-gradient(158deg,
+      rgba(90, 200, 250, 0.50) 0%,
+      rgba(44, 158, 226, 0.58) 100%);
+  color: var(--text-default-color);
+  text-shadow: none;
+  box-shadow: var(--lg-ctl-shadow-hover);
+}
+
+/* 选中行的删除按钮原本是白色图标，配上浅色玻璃会看不清。 */
+.wrap[data-theme="liquid-glass"][data-theme] ul li.active .sidebar-remove-btn {
+  color: var(--text-subtitle-color);
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] ul li.active .sidebar-remove-btn:hover {
+  color: #d8323c;
+}
+
+/* 有颜色的液态玻璃：不再用实色填充，而是把主题色作为半透明染色层压在玻璃里，
+   --lg-ctl-tint 由下面的语义变体（危险 / 收藏）单独覆盖。 */
+.wrap[data-theme="liquid-glass"][data-theme] :is(
+  .action-btn, .icon-btn, .mini-action, .chip, .filter-tag,
+  .key-chip, .key-add, .dialog-btn, .offset-btn,
+  .btn-load-more, .btn-pagination, .search-btn, .search-action-btn,
+  .update-btn, .empty-add-button, .remove-all, .sidebar-remove-btn,
+  .sidebar-icon-btn, .zoom-reset, .add-menu-new, .theme-card,
+  .source-button, .playlist-button,
+  .lyric-toggle, .translate-switch
+):is(.primary, .danger, .active, .selected, .saved, .favorited, .local-action-button) {
+  background:
+    linear-gradient(158deg,
+      rgba(255, 255, 255, 0.50) 0%,
+      rgba(255, 255, 255, 0.12) 34%,
+      transparent 62%),
+    linear-gradient(158deg,
+      rgba(var(--lg-ctl-tint), 0.62) 0%,
+      rgba(var(--lg-ctl-tint), 0.86) 100%);
+  border-color: rgba(255, 255, 255, 0.62);
+  color: #fff;
+  text-shadow: 0 1px 1px rgba(10, 26, 42, 0.26);
+  box-shadow:
+    0 2px 6px rgba(var(--lg-ctl-tint), 0.28),
+    0 10px 24px rgba(var(--lg-ctl-tint), 0.20),
+    inset 0 1px 0 rgba(255, 255, 255, 0.72),
+    inset 0 -1px 0 rgba(var(--lg-ctl-tint), 0.36);
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] :is(
+  .action-btn, .mini-action, .dialog-btn, .playlist-button
+):is(.danger, .remove-all) {
+  --lg-ctl-tint: 240, 84, 92;
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] .playlist-button.fav-button.favorited {
+  --lg-ctl-tint: 255, 106, 138;
+}
+
+/* 最低档：有颜色的玻璃按钮同样不留带模糊半径的投影。
+   上面 --lg-ctl-shadow: none 只管到无色按钮，染色按钮的 box-shadow 是写死的，
+   不在这里覆盖就会成为低配设备上唯一残留的模糊绘制开销。 */
+.wrap[data-theme="liquid-glass"][data-visual="low"] :is(
+  .action-btn, .icon-btn, .mini-action, .chip, .filter-tag,
+  .key-chip, .key-add, .dialog-btn, .offset-btn,
+  .btn-load-more, .btn-pagination, .search-btn, .search-action-btn,
+  .update-btn, .empty-add-button, .remove-all, .sidebar-remove-btn,
+  .sidebar-icon-btn, .zoom-reset, .add-menu-new, .theme-card,
+  .source-button, .playlist-button,
+  .lyric-toggle, .translate-switch
+):is(.primary, .danger, .active, .selected, .saved, .favorited, .local-action-button) {
+  box-shadow: none;
+  text-shadow: none;
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] :is(
+  .action-btn, .icon-btn, .mini-action, .chip, .filter-tag,
+  .key-chip, .key-add, .dialog-btn, .offset-btn,
+  .btn-load-more, .btn-pagination, .search-btn, .search-action-btn,
+  .update-btn, .empty-add-button, .remove-all, .sidebar-remove-btn,
+  .sidebar-icon-btn, .zoom-reset, .add-menu-new, .theme-card,
+  .source-button, .playlist-button,
+  .lyric-toggle, .translate-switch
+):is(:disabled, [aria-disabled="true"]) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+  box-shadow: none;
+  text-shadow: none;
+}
+
 /* Reduced-motion */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -497,10 +740,4 @@ input, select, textarea { font: inherit; color: inherit; }
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
-}
-
-/* Moved from LiquidGlassSurface.svelte (component has no DOM to scope styles to) */
-.listen1-liquid-glass,
-.listen1-liquid-glass-lens {
-  pointer-events: none !important;
 }

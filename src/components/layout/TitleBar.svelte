@@ -1,9 +1,9 @@
 <script lang="ts">
-  import { getTauriRuntimeDiagnostics, windowMinimize, windowMaximize, windowClose } from "../../lib/tauri";
   import { playerState } from "../../lib/stores/player";
   import { runOnActionKey } from "../../lib/keyboard";
   import { fly } from "svelte/transition";
   import { quintOut } from "svelte/easing";
+  import WindowControls from "./WindowControls.svelte";
 
   let {
     canGoBack = false,
@@ -22,15 +22,6 @@
 
   function doSearch() {
     if (searchQuery.trim()) navigate({ type: "search", query: searchQuery });
-  }
-
-  function runWindowCommand(name: string, command: () => Promise<unknown>) {
-    command().catch((error) => {
-      console.error(`[TitleBar] ${name} failed`, {
-        error,
-        tauri: getTauriRuntimeDiagnostics(),
-      });
-    });
   }
 
   function toggleSettings() {
@@ -86,23 +77,7 @@
       </svg>
     </span>
 
-    <div class="window-control">
-      <button type="button" class="wc-btn" onclick={() => runWindowCommand("minimize", windowMinimize)} aria-label="最小化">
-        <svg width="18" height="18" viewBox="0 0 24 24">
-          <line x1="5" y1="12" x2="19" y2="12"/>
-        </svg>
-      </button>
-      <button type="button" class="wc-btn" onclick={() => runWindowCommand("maximize", windowMaximize)} aria-label="最大化">
-        <svg width="18" height="18" viewBox="0 0 24 24">
-          <rect x="3" y="3" width="18" height="18" rx="2"/>
-        </svg>
-      </button>
-      <button type="button" class="wc-btn close-btn" onclick={() => runWindowCommand("close", windowClose)} aria-label="关闭">
-        <svg width="18" height="18" viewBox="0 0 24 24">
-          <path d="M18 6L6 18M6 6l12 12"/>
-        </svg>
-      </button>
-    </div>
+    <WindowControls />
   </div>
 </div>
 
@@ -211,44 +186,8 @@
     margin-right: 8px;
   }
 
-  .window-control {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-  }
-
-  .window-control .wc-btn {
-    all: unset;
-    margin-left: 4px;
-    padding: 6px;
-    box-sizing: content-box;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    -webkit-app-region: no-drag;
-    transition: background 0.2s;
-  }
-
-  .window-control .wc-btn svg {
-    stroke: var(--player-icon-color);
-    transition: stroke var(--dur-fast) var(--ease-soft);
-  }
-
-  .window-control .wc-btn:hover {
-    background: var(--songlist-hover-background-color);
-  }
-  .window-control .wc-btn:hover svg {
-    stroke: var(--text-default-color);
-  }
-  .window-control .wc-btn:active { opacity: 0.8; }
-  .window-control .close-btn:hover {
-    background: #ff4444;
-  }
-  .window-control .close-btn:hover svg {
-    stroke: #fff;
-  }
+  /* 窗口控件（.window-control / .wc-btn）的样式在 WindowControls.svelte 内，
+     那里是它唯一的宿主；展开态的悬浮版复用同一份。 */
 
   @media (max-width: 720px) {
     .navigation {
@@ -284,25 +223,11 @@
     .settings.is-setting {
       margin-right: 2px;
     }
-
-    .window-control .wc-btn {
-      margin-left: 0;
-      padding: 5px;
-    }
-
-    .window-control .wc-btn svg {
-      width: 16px;
-      height: 16px;
-    }
   }
 
   @media (max-width: 440px) {
     .search {
       max-width: calc(100vw - 172px);
-    }
-
-    .window-control .wc-btn {
-      padding: 4px;
     }
   }
 </style>

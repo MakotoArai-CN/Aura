@@ -1,8 +1,9 @@
-use base64::{engine::general_purpose, Engine as _};
 use lofty::prelude::{Accessor, AudioFile, TaggedFileExt};
 use lofty::tag::{ItemKey, Tag};
 use serde::{Deserialize, Serialize};
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -11,9 +12,18 @@ pub struct AudioMeta {
     pub artist: Option<String>,
     pub album: Option<String>,
     pub lyrics: Option<String>,
+    /// 可直接当 `src` 用的封面地址（来自 sidecar 的 http / data URL）。
     pub cover: Option<String>,
+    /// 内嵌封面落盘后的绝对路径。前端转成 `file://` 存起来，渲染时再经本机流服务器取。
+    ///
+    /// 之所以不像以前那样直接回 base64 data URL：那串东西前端要么塞进 localStorage
+    /// 把配额撑爆，要么每次渲染都得重新读一遍文件。落盘之后存储里只剩一个短路径。
+    pub cover_path: Option<String>,
     pub duration: Option<f64>,
     pub bitrate: Option<f64>,
+    /// 标签是否真的读出来了。false = 文件打不开/格式不认，前端不能把这次当成
+    /// 「已扫描完毕、这首歌就是没信息」缓存下来，否则永远不会再重试。
+    pub tags_read: bool,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -55,7 +65,42 @@ fn infer_mime_type(bytes: &[u8]) -> &'static str {
     }
 }
 
-fn picture_data_url(tags: &[&Tag]) -> Option<String> {
+/// 内嵌封面的落盘目录，和音频缓存同级。
+fn cover_cache_dir() -> PathBuf {
+    crate::cache::user_home_dir()
+        .join("Listen1")
+        .join("Cache")
+        .join("covers")
+}
+
+/// 缓存文件名。除路径外还把「文件长度 + 修改时间」揉进去：用户重新打过标签换了
+/// 封面之后这两个值会变，于是自然算出新文件名，不会一直拿旧图。
+fn cover_cache_key(path: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    path.hash(&mut hasher);
+    if let Ok(meta) = fs::metadata(path) {
+        meta.len().hash(&mut hasher);
+        if let Ok(modified) = meta.modified() {
+            if let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH) {
+                since_epoch.as_secs().hash(&mut hasher);
+            }
+        }
+    }
+    format!("{:016x}", hasher.finish())
+}
+
+fn cover_extension(mime: &str) -> &'static str {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "image/bmp" | "image/x-ms-bmp" => "bmp",
+        _ => "jpg",
+    }
+}
+
+/// 把内嵌封面写进缓存目录，返回绝对路径。已经存在就直接复用，不重复写盘。
+fn extract_cover_to_cache(path: &str, tags: &[&Tag]) -> Option<String> {
     let picture = tags
         .iter()
         .find_map(|tag| tag.get_picture_type(lofty::picture::PictureType::CoverFront))
@@ -70,11 +115,17 @@ fn picture_data_url(tags: &[&Tag]) -> Option<String> {
         .mime_type()
         .map(|mime| mime.as_str())
         .unwrap_or_else(|| infer_mime_type(data));
-    Some(format!(
-        "data:{};base64,{}",
-        mime,
-        general_purpose::STANDARD.encode(data)
-    ))
+    let file = cover_cache_dir().join(format!(
+        "{}.{}",
+        cover_cache_key(path),
+        cover_extension(mime)
+    ));
+    if file.is_file() {
+        return Some(file.to_string_lossy().into_owned());
+    }
+    fs::create_dir_all(file.parent()?).ok()?;
+    fs::write(&file, data).ok()?;
+    Some(file.to_string_lossy().into_owned())
 }
 
 fn lyrics_text(tags: &[&Tag]) -> Option<String> {
@@ -128,8 +179,10 @@ fn sidecar_audio_meta(path: &str, sidecar: SidecarMeta) -> AudioMeta {
         album: clean_text(sidecar.album),
         lyrics: sidecar_lyrics(path).or_else(|| clean_text(sidecar.lyrics)),
         cover: clean_text(sidecar.cover_data_url).or_else(|| clean_text(sidecar.cover_url)),
+        cover_path: None,
         duration: None,
         bitrate: None,
+        tags_read: false,
     }
 }
 
@@ -182,17 +235,11 @@ pub fn read_audio_tags(path: String) -> Result<AudioMeta, String> {
     let tagged_file = match lofty::read_from_path(&path) {
         Ok(file) => file,
         Err(error) => {
-            if sidecar.title.is_some()
-                || sidecar.artist.is_some()
-                || sidecar.album.is_some()
-                || sidecar.lyrics.is_some()
-                || sidecar.cover_url.is_some()
-                || sidecar.cover_data_url.is_some()
-                || sidecar_lyrics(&path).is_some()
-            {
-                return Ok(sidecar_audio_meta(&path, sidecar));
-            }
-            return Err(error.to_string());
+            // 读不出标签不算失败：至少还能给出文件名和 sidecar/.lrc 里的东西。
+            // 返回 Err 的老做法让前端把这首歌记成「扫过了，没信息」，再也不会重试，
+            // 也就再没机会联网补齐——这正是本地歌显示不出歌手/封面的一条路径。
+            eprintln!("[listen1] read tags failed, falling back to sidecar: {path} ({error})");
+            return Ok(sidecar_audio_meta(&path, sidecar));
         }
     };
     let mut tags = Vec::new();
@@ -223,11 +270,11 @@ pub fn read_audio_tags(path: String) -> Result<AudioMeta, String> {
         lyrics: lyrics_text(&tags)
             .or_else(|| sidecar_lyrics(&path))
             .or_else(|| clean_text(sidecar.lyrics)),
-        cover: picture_data_url(&tags)
-            .or_else(|| clean_text(sidecar.cover_data_url))
-            .or_else(|| clean_text(sidecar.cover_url)),
+        cover: clean_text(sidecar.cover_data_url).or_else(|| clean_text(sidecar.cover_url)),
+        cover_path: extract_cover_to_cache(&path, &tags),
         duration: Some(duration),
         bitrate,
+        tags_read: true,
     })
 }
 
@@ -247,4 +294,36 @@ pub fn scan_music_directory(directory: String) -> Result<Vec<String>, String> {
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{cover_cache_key, cover_extension, infer_mime_type};
+
+    #[test]
+    fn maps_mime_to_extension() {
+        assert_eq!(cover_extension("image/png"), "png");
+        assert_eq!(cover_extension("IMAGE/WebP"), "webp");
+        assert_eq!(cover_extension("image/bmp"), "bmp");
+        // 未知类型统一按 jpg 落盘：浏览器按内容嗅探，扩展名只是给人看的。
+        assert_eq!(cover_extension("application/octet-stream"), "jpg");
+        assert_eq!(cover_extension(""), "jpg");
+    }
+
+    #[test]
+    fn sniffs_common_image_headers() {
+        assert_eq!(infer_mime_type(&[0x89, b'P', b'N', b'G']), "image/png");
+        assert_eq!(infer_mime_type(&[0xff, 0xd8, 0xff, 0xe0]), "image/jpeg");
+        assert_eq!(infer_mime_type(b"RIFF____WEBPVP8 "), "image/webp");
+        assert_eq!(infer_mime_type(b"nonsense"), "application/octet-stream");
+    }
+
+    #[test]
+    fn cache_key_is_stable_per_path_and_differs_across_paths() {
+        // 同一路径两次调用必须一致，否则每次扫描都会多写一份封面。
+        let once = cover_cache_key("/music/a.flac");
+        assert_eq!(once, cover_cache_key("/music/a.flac"));
+        assert_ne!(once, cover_cache_key("/music/b.flac"));
+        assert_eq!(once.len(), 16);
+    }
 }

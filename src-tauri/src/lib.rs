@@ -21,17 +21,22 @@ pub fn run() {
     #[cfg(debug_assertions)]
     eprintln!("[listen1] starting app, stream_base_url={stream_base_url}");
 
-    // 设备分级决定 WebView2 渲染策略：仅高性能 CPU + 独显启用 GPU 加速，
-    // 其余走软件渲染（省显存/内存，UI 场景足够）。必须在首个 WebView 创建前设置。
+    // 设备分级决定 WebView2 渲染策略。必须在首个 WebView 创建前设置。
+    // 与渲染质量无关的省内存开关（OOUI/SmartScreen/独立音频进程）三档通用；
+    // 只有非 high 档才额外关掉 GPU 合成走软件渲染——high 档保持 GPU 加速，
+    // 视觉效果与 GitHub 原版一致。
     #[cfg(debug_assertions)]
     eprintln!("[listen1] device_tier={:?}", device_tier::detect());
 
     #[cfg(windows)]
-    if !device_tier::should_enable_gpu_acceleration() {
-        std::env::set_var(
-            "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess --disable-gpu --disable-gpu-compositing",
+    {
+        let mut args = String::from(
+            "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess",
         );
+        if !device_tier::should_enable_gpu_acceleration() {
+            args.push_str(" --disable-gpu --disable-gpu-compositing");
+        }
+        std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args);
     }
 
     let builder = tauri::Builder::default()
@@ -154,8 +159,10 @@ pub fn run() {
             cache::set_cache_config,
             cache::get_cache_stats,
             cache::clear_audio_cache,
+            cache::audio_cache_lookup,
             system_stats::get_resource_usage,
             device_tier::get_device_tier,
+            device_tier::set_effect_tier_override,
             update::download_and_run_update,
             update::get_update_assets,
         ]);

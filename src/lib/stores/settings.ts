@@ -1,4 +1,4 @@
-import { writable, get } from "svelte/store";
+import { writable, derived, get } from "svelte/store";
 
 export interface ProxyConfig {
   mode: "system" | "direct" | "manual";
@@ -25,8 +25,7 @@ export interface LyricWindowSettings {
 }
 
 export interface AppSettings {
-  theme: "origin" | "origin2" | "black2" | "white2" | "liquidGlass";
-  enableImmersivePlayer: boolean;
+  theme: "origin" | "origin2" | "black2" | "white2" | "liquidGlass" | "auto";
   enableAutostart: boolean;
   enableGlobalShortcut: boolean;
   enableAutoChooseSource: boolean;
@@ -55,11 +54,16 @@ export interface AppSettings {
     skipWhenLocalQualitySufficient: boolean;
   };
   zoomLevel: number;
+  /**
+   * 视觉效果档位。"auto" = 交给 Rust 的硬件检测 + 运行时 CPU 看门狗；
+   * 其余为手动锁定，检测与看门狗一律不再插手。
+   * 注意 "auto" 最高只会自动选到 high；"ultra" 是纯手动选项。
+   */
+  effectTier: "auto" | "ultra" | "high" | "mid" | "low";
 }
 
 const defaults: AppSettings = {
   theme: "black2",
-  enableImmersivePlayer: false,
   enableAutostart: false,
   enableGlobalShortcut: false,
   enableAutoChooseSource: true,
@@ -120,6 +124,7 @@ const defaults: AppSettings = {
     skipWhenLocalQualitySufficient: true,
   },
   zoomLevel: 1,
+  effectTier: "auto",
 };
 
 function loadSettings(): AppSettings {
@@ -152,21 +157,10 @@ function loadSettings(): AppSettings {
       next.globalShortcuts = { ...defaults.globalShortcuts, ...(parsed.globalShortcuts ?? {}) };
       next.localMusicScan = { ...defaults.localMusicScan, ...(parsed.localMusicScan ?? {}) };
       if (next.theme === "origin" || next.theme === "origin2") next.theme = "black2";
-      if (
-        typeof (parsed as { enableImmersivePlayer?: unknown }).enableImmersivePlayer === "undefined" &&
-        (parsed as { enableMineradioStage?: unknown }).enableMineradioStage === true
-      ) {
-        next.enableImmersivePlayer = true;
-      }
-      if ((parsed as { theme?: string; playerTheme?: string }).theme === "mineradio") {
-        next.theme = "black2";
-        next.enableImmersivePlayer = true;
-      }
-      if ((parsed as { playerTheme?: string }).playerTheme === "mineradio") {
-        next.enableImmersivePlayer = true;
-      }
-      delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown }).playerTheme;
-      delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown }).enableMineradioStage;
+      if ((parsed as { theme?: string }).theme === "mineradio") next.theme = "black2";
+      delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown; enableImmersivePlayer?: unknown }).playerTheme;
+      delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown; enableImmersivePlayer?: unknown }).enableMineradioStage;
+      delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown; enableImmersivePlayer?: unknown }).enableImmersivePlayer;
       return next;
     }
   } catch {}
@@ -207,3 +201,23 @@ function createSettingsStore() {
 }
 
 export const settings = createSettingsStore();
+
+/** 系统是否处于深色模式；仅在「自动」外观下被读取。 */
+const systemDark = writable(
+  typeof window !== "undefined" && window.matchMedia
+    ? window.matchMedia("(prefers-color-scheme: dark)").matches
+    : true,
+);
+
+if (typeof window !== "undefined" && window.matchMedia) {
+  const mql = window.matchMedia("(prefers-color-scheme: dark)");
+  mql.addEventListener("change", (e) => systemDark.set(e.matches));
+}
+
+/** 实际生效的主题：把「自动」折叠成 black2 / white2，其余原样透出。 */
+export const resolvedTheme = derived(
+  [settings, systemDark],
+  ([$settings, $systemDark]): Exclude<AppSettings["theme"], "auto"> =>
+    $settings.theme === "auto" ? ($systemDark ? "black2" : "white2") : $settings.theme,
+);
+

@@ -5,7 +5,6 @@
   import TitleBar from "./components/layout/TitleBar.svelte";
   import Sidebar from "./components/layout/Sidebar.svelte";
   import BottomPlayer from "./components/layout/BottomPlayer.svelte";
-  import ImmersivePlayer from "./components/layout/ImmersivePlayer.svelte";
   import SearchView from "./components/views/SearchView.svelte";
   import DiscoverView from "./components/views/DiscoverView.svelte";
   import PlaylistView from "./components/views/PlaylistView.svelte";
@@ -20,13 +19,16 @@
     getTauriRuntimeDiagnostics,
     hideFloatWindow,
     isAutostartEnabled,
+    isTauriRuntime,
     listen,
     setCacheConfig,
+    setEffectTierOverride,
     setProxyConfig,
     showFloatWindow,
   } from "./lib/tauri";
-  import { settings, type AppSettings } from "./lib/stores/settings";
+  import { settings, resolvedTheme, type AppSettings } from "./lib/stores/settings";
   import { deviceTier, initDeviceTier } from "./lib/stores/device";
+  import { startEffectWatchdog } from "./lib/effectWatchdog";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "./lib/shortcuts";
   import { bindPlayerKeyboard } from "./lib/keyboard";
   import { localmusic } from "./lib/providers/localmusic";
@@ -41,7 +43,6 @@
 
   let currentView: View = $state({ type: "discover", source: "netease" });
   let history: View[] = $state([]);
-  let immersivePlayerActive = $derived($settings.enableImmersivePlayer && $settings.theme === "black2");
   let lastTrayActionId = "";
   let contentView = $derived.by(() => {
     if (currentView.type !== "nowplaying") return currentView;
@@ -110,6 +111,14 @@
 
   onMount(() => {
     void initDeviceTier();
+    // 效果档位的 Rust 侧副本（决定下次启动的 GPU 参数）可能因为升级或文件被删而缺失，
+    // 每次启动按 localStorage 的现值回写一遍，自愈。
+    if (isTauriRuntime()) {
+      setEffectTierOverride($settings.effectTier).catch((error) =>
+        console.warn("[App] 同步效果档位到 Rust 失败", error)
+      );
+    }
+    startEffectWatchdog();
 
     let unlisten: (() => void) | null = null;
     let disposed = false;
@@ -213,9 +222,8 @@
 
 <div
   class="wrap"
-  data-theme={$settings.theme === "white2" ? "light" : $settings.theme === "liquidGlass" ? "liquid-glass" : "dark"}
+  data-theme={$resolvedTheme === "white2" ? "light" : $resolvedTheme === "liquidGlass" ? "liquid-glass" : "dark"}
   data-visual={$deviceTier}
-  data-immersive-player={immersivePlayerActive}
 >
   <div class="body-bg">
     <div class="main" id="listen1-glass-scene">
@@ -251,21 +259,12 @@
         </div>
       </div>
     </div>
-    {#if immersivePlayerActive}
-      <ImmersivePlayer
-        {navigate}
-        activeView={currentView}
-        nowPlayingOpen={currentView.type === "nowplaying"}
-        onCloseNowPlaying={closeNowPlaying}
-      />
-    {:else}
-      <BottomPlayer
-        {navigate}
-        activeView={currentView}
-        nowPlayingOpen={currentView.type === "nowplaying"}
-        onCloseNowPlaying={closeNowPlaying}
-      />
-    {/if}
+    <BottomPlayer
+      {navigate}
+      activeView={currentView}
+      nowPlayingOpen={currentView.type === "nowplaying"}
+      onCloseNowPlaying={closeNowPlaying}
+    />
   </div>
 
   <Toast />
@@ -282,10 +281,6 @@
     outline: solid 1px var(--windows-border-color);
     box-sizing: border-box;
     color: var(--text-default-color);
-  }
-
-  .wrap[data-immersive-player="true"] {
-    --player-height: 0px;
   }
 
   .body-bg {
