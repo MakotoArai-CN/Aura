@@ -15,6 +15,11 @@ type LocalTrack = Track & {
   meta_version?: number;
   /** 联网补齐元数据的时间戳。有值表示试过了，避免每次播放都再搜一遍。 */
   online_meta_at?: number;
+  /**
+   * 歌词是联网补来的而不是从文件读的。stripHeavyFields 靠它豁免：内嵌歌词随时能
+   * 重读文件，联网这份不行（online_meta_at 一写上就不会再联网）。
+   */
+  lyric_from_online?: boolean;
 };
 
 function fileUriFromPath(filePath: string): string {
@@ -59,7 +64,9 @@ function stripHeavyFields<T extends LocalTrack>(track: T): T {
   if (cover.startsWith("data:")) next.img_url = "";
   // Embedded lyrics can also be sizeable; drop them from persistent storage
   // and rely on on-demand reads via `lyric()` when the user plays the track.
-  if (lyric.length > 2000) next.lyric = "";
+  // 但联网补来的那份不能剥：文件里本来就没有歌词，online_meta_at 又已经写上了不会
+  // 再联网，剥掉就是永久丢失。
+  if (lyric.length > 2000 && !track.lyric_from_online) next.lyric = "";
   return next;
 }
 
@@ -166,30 +173,44 @@ function mergeMeta(base: LocalTrack, next: LocalTrack): LocalTrack {
   }
   if (next.duration == null && base.duration != null) merged.duration = base.duration;
   if (!next.bitrate && base.bitrate) merged.bitrate = base.bitrate;
+  // 歌词来源标记要跟着歌词走：换成文件里读出来的就清掉，否则这条会一直被当成联网
+  // 歌词豁免落盘，白占配额。
+  if (next.lyric) merged.lyric_from_online = next.lyric_from_online ?? false;
+  else if (base.lyric) merged.lyric_from_online = base.lyric_from_online;
   return merged;
 }
 
-async function refreshStoredTrack(track: Track): Promise<LocalTrack> {
+/**
+ * 返回 changed=false 表示这条不需要落盘。以前这里恒返回新对象，调用方拿 `!==`
+ * 判脏，于是每打开一次本地歌单就把整个歌单重写一遍 localStorage。
+ */
+async function refreshStoredTrack(track: Track): Promise<{ track: LocalTrack; changed: boolean }> {
   const localTrack = track as LocalTrack;
   if (localTrack.meta_scanned && localTrack.meta_version === LOCAL_META_VERSION) {
-    return { ...localTrack, disabled: false };
+    return { track: { ...localTrack, disabled: false }, changed: localTrack.disabled === true };
   }
 
   const filePath = localPathFromTrack(track);
   if (!filePath) {
     return {
-      ...localTrack,
-      disabled: false,
-      meta_scanned: true,
-      meta_version: LOCAL_META_VERSION,
+      track: {
+        ...localTrack,
+        disabled: false,
+        meta_scanned: true,
+        meta_version: LOCAL_META_VERSION,
+      },
+      changed: true,
     };
   }
 
   const refreshed = await trackFromPath(filePath);
   return {
-    ...mergeMeta(localTrack, refreshed),
-    disabled: false,
-    sound_url: undefined,
+    track: {
+      ...mergeMeta(localTrack, refreshed),
+      disabled: false,
+      sound_url: undefined,
+    },
+    changed: true,
   };
 }
 
@@ -292,9 +313,13 @@ export const localmusic = {
     let changed = false;
     const refreshedTracks: Track[] = [];
     for (const track of pl.tracks) {
-      const refreshed = await refreshStoredTrack(track);
-      refreshedTracks.push(refreshed);
-      if (refreshed !== track) changed = true;
+      const result = await refreshStoredTrack(track);
+      // 重读出来的内嵌歌词必须剥掉再落盘。trackFromPath 带回的是完整歌词（一首几十
+      // KB），这条路径以前不经 stripHeavyFields，上千首本地歌直接把 localStorage
+      // 配额撑爆，lsSet 抛错后整个本地歌单都加载不出来。联网补来的那份带
+      // lyric_from_online，被 stripHeavyFields 豁免，不会被这一刀带走。
+      refreshedTracks.push(stripHeavyFields(result.track));
+      if (result.changed) changed = true;
     }
     if (changed) {
       pl.tracks = refreshedTracks;

@@ -303,7 +303,9 @@ async function enrichLocalTrackMeta(trackId: string, embeddedLyric: string): Pro
   const task = (async () => {
     const target = localSearchTarget(stored);
     const online = await resolveOnlineLocalMeta(target, needLyric).catch(() => null);
-    const patch: Partial<Track> & { online_meta_at: number } = { online_meta_at: Date.now() };
+    const patch: Partial<Track> & { online_meta_at: number; lyric_from_online?: boolean } = {
+      online_meta_at: Date.now(),
+    };
     if (online) {
       if (needCover && online.img_url) patch.img_url = online.img_url;
       if (needArtist && online.artist) {
@@ -314,7 +316,11 @@ async function enrichLocalTrackMeta(trackId: string, embeddedLyric: string): Pro
       // 歌词也要落存储。online_meta_at 一旦写上就不会再联网，不存下来的话
       // 这首歌下次播放就又没歌词了（文件里本来就没有，localmusic.lyric() 会回退到
       // track.lyric）。
-      if (needLyric && online.lyric) patch.lyric = online.lyric;
+      if (needLyric && online.lyric) {
+        patch.lyric = online.lyric;
+        // 标记来源。stripHeavyFields 只剥能从文件重读的内嵌歌词，这份必须留住。
+        patch.lyric_from_online = true;
+      }
     }
     localmusic.applyMetaPatch(trackId, patch);
     return online?.lyric ?? "";
