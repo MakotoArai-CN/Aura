@@ -320,8 +320,33 @@ jobs:
       - name: Initialize Android project
         run: bun run tauri:android:init
 
+      # tauri android init 铺的是模板自带的默认图标，src-tauri/icons/android 里项目自己的
+      # mipmap 从来没被用上，装出来的 APK 图标一直是 Tauri 的默认图案。
+      - name: Copy Android icons
+        run: |
+          ANDROID_RES="src-tauri/gen/android/app/src/main/res"
+          ICON_SRC="src-tauri/icons/android"
+
+          if [ ! -d "$ICON_SRC" ]; then
+            echo "::error::$ICON_SRC 不存在，APK 会退回 Tauri 默认图标"
+            exit 1
+          fi
+
+          for dir in "$ICON_SRC"/mipmap-* "$ICON_SRC"/values; do
+            [ -d "$dir" ] || continue
+            dirname=$(basename "$dir")
+            mkdir -p "$ANDROID_RES/$dirname"
+            cp -rf "$dir"/* "$ANDROID_RES/$dirname/"
+          done
+
+          ls -R "$ANDROID_RES"/mipmap-anydpi-v26 "$ANDROID_RES"/mipmap-xxxhdpi
+
       - name: Setup Android signing
         run: |
+          if [ -z "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "::error::缺少 ANDROID_KEYSTORE_BASE64，签不了名的 APK 装不上"
+            exit 1
+          fi
           echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > src-tauri/gen/android/release.jks
           cat > src-tauri/gen/android/keystore.properties << 'PROPS'
           storePassword=${{ secrets.ANDROID_STORE_PASSWORD }}
@@ -329,6 +354,105 @@ jobs:
           keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}
           storeFile=../release.jks
           PROPS
+
+      # 光有 keystore.properties 和 release.jks 没用：tauri android init 生成的
+      # app/build.gradle.kts 里根本没有 signingConfigs，release 变体不引用任何签名配置，
+      # 打出来的是未签名 APK —— Android 直接拒绝安装，也就是"没有签名、打不开"。
+      # 这里整份覆盖，把 release 变体接到 keystore.properties 上。
+      - name: Apply custom build.gradle.kts
+        run: |
+          cat > src-tauri/gen/android/app/build.gradle.kts << 'GRADLE_EOF'
+          import java.util.Properties
+          import java.io.FileInputStream
+
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("rust")
+          }
+
+          val tauriProperties = Properties().apply {
+              val propFile = file("tauri.properties")
+              if (propFile.exists()) {
+                  propFile.inputStream().use { load(it) }
+              }
+          }
+
+          android {
+              compileSdk = 36
+              namespace = "com.makotoarai.aura"
+              defaultConfig {
+                  manifestPlaceholders["usesCleartextTraffic"] = "true"
+                  applicationId = "com.makotoarai.aura"
+                  minSdk = 24
+                  targetSdk = 36
+                  versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
+                  versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+              }
+              signingConfigs {
+                  create("release") {
+                      val keystorePropertiesFile = rootProject.file("keystore.properties")
+                      val keystoreProperties = Properties()
+                      if (keystorePropertiesFile.exists()) {
+                          keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+                      }
+
+                      keyAlias = keystoreProperties["keyAlias"] as String?
+                      keyPassword = keystoreProperties["keyPassword"] as String?
+                      storeFile = keystoreProperties["storeFile"]?.let { file(it as String) }
+                      storePassword = keystoreProperties["storePassword"] as String?
+                  }
+              }
+              buildTypes {
+                  getByName("debug") {
+                      manifestPlaceholders["usesCleartextTraffic"] = "true"
+                      isDebuggable = true
+                      isJniDebuggable = true
+                      isMinifyEnabled = false
+                      packaging {
+                          jniLibs.keepDebugSymbols.add("*/arm64-v8a/*.so")
+                          jniLibs.keepDebugSymbols.add("*/armeabi-v7a/*.so")
+                          jniLibs.keepDebugSymbols.add("*/x86/*.so")
+                          jniLibs.keepDebugSymbols.add("*/x86_64/*.so")
+                      }
+                  }
+                  getByName("release") {
+                      isMinifyEnabled = true
+                      isShrinkResources = true
+                      signingConfig = signingConfigs.getByName("release")
+                      proguardFiles(
+                          *fileTree(".") { include("**/*.pro") }
+                              .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
+                              .toList().toTypedArray()
+                      )
+                  }
+              }
+              kotlinOptions {
+                  jvmTarget = "1.8"
+              }
+              buildFeatures {
+                  buildConfig = true
+              }
+          }
+
+          rust {
+              rootDirRel = "../../../"
+          }
+
+          dependencies {
+              implementation("androidx.webkit:webkit:1.14.0")
+              implementation("androidx.appcompat:appcompat:1.7.1")
+              implementation("androidx.core:core-ktx:1.16.0")
+              implementation("androidx.core:core-splashscreen:1.0.1")
+              implementation("androidx.activity:activity-ktx:1.10.1")
+              implementation("com.google.android.material:material:1.12.0")
+              testImplementation("junit:junit:4.13.2")
+              androidTestImplementation("androidx.test.ext:junit:1.1.4")
+              androidTestImplementation("androidx.test.espresso:espresso-core:3.5.0")
+          }
+
+          apply(from = "tauri.build.gradle.kts")
+          GRADLE_EOF
 
       - name: Build Android APK
         run: bun run tauri:android:build -- --split-per-abi
@@ -345,6 +469,10 @@ jobs:
           mkdir -p android-apks
           find src-tauri/gen/android -path "*/release/*.apk" -type f | while read apk; do
             filename=$(basename "$apk")
+            # 签名开启后同一目录里可能同时留着中间产物 *-unsigned.apk，别把它当成品收走。
+            if [[ "$filename" == *"unsigned"* ]]; then
+              continue
+            fi
             if [[ "$filename" == *"arm64"* ]]; then
               cp "$apk" "android-apks/aura-android-arm64.apk"
             elif [[ "$filename" == *"arm"* ]]; then
@@ -358,6 +486,16 @@ jobs:
             fi
           done
           ls -la android-apks/
+
+      # 别再让未签名的 APK 混进 Release：装不上的包发出去等于没发。
+      - name: Verify APK signatures
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -1)
+          echo "apksigner: $APKSIGNER"
+          for apk in android-apks/*.apk; do
+            echo "--- $apk"
+            "$APKSIGNER" verify --print-certs "$apk"
+          done
 
       - name: Upload Android artifacts
         uses: actions/upload-artifact@v4
@@ -384,6 +522,15 @@ jobs:
       - name: List artifacts
         run: find artifacts -type f 2>/dev/null || echo "No artifacts found"
 
+      # 发布页给出校验值，用户下完能自己核对完整性。
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name "*.exe" -o -name "*.msi" -o -name "*.dmg" \
+            -o -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" -o -name "*.apk" \) \
+            -exec sha256sum {} + | sed 's|\./[^ ]*/||' | sort -k2 > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+
       - name: Generate changelog
         id: changelog
         run: |
@@ -399,33 +546,92 @@ jobs:
           VERSION_NUM="${{ needs.get-version.outputs.version_num }}"
           REPO="${{ github.repository }}"
           BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+          SHIELD="https://img.shields.io/badge"
+          STYLE="style=for-the-badge"
 
           {
             echo "body<<EOF"
+            echo '<div align="center">'
+            echo ""
+            echo "<img src='https://raw.githubusercontent.com/${REPO}/${VERSION}/src-tauri/icons/128x128%402x.png' width='96' alt='Aura' />"
+            echo ""
+            echo "# Aura ${VERSION}"
+            echo ""
+            echo "**One for all free music** — 聚合多源的免费音乐播放器"
+            echo ""
+            echo "[![release](https://img.shields.io/github/v/release/${REPO}?${STYLE}&logo=github&label=release&color=8b5cf6)](https://github.com/${REPO}/releases/latest) [![downloads](https://img.shields.io/github/downloads/${REPO}/total?${STYLE}&logo=github&label=downloads&color=22c55e)](https://github.com/${REPO}/releases) [![stars](https://img.shields.io/github/stars/${REPO}?${STYLE}&logo=github&color=eab308)](https://github.com/${REPO}/stargazers) [![license](https://img.shields.io/github/license/${REPO}?${STYLE}&color=64748b)](https://github.com/${REPO}/blob/master/LICENSE)"
+            echo ""
+            echo "![Tauri](${SHIELD}/Tauri-2-24C8DB?${STYLE}&logo=tauri&logoColor=white) ![Svelte](${SHIELD}/Svelte-5-FF3E00?${STYLE}&logo=svelte&logoColor=white) ![Rust](${SHIELD}/Rust-000000?${STYLE}&logo=rust&logoColor=white) ![TypeScript](${SHIELD}/TypeScript-3178C6?${STYLE}&logo=typescript&logoColor=white)"
+            echo ""
+            echo '</div>'
+            echo ""
             echo "## 更新日志"
             echo ""
             echo "$COMMITS"
             echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "完整差异：[\`${PREV_TAG}...${VERSION}\`](https://github.com/${REPO}/compare/${PREV_TAG}...${VERSION})"
+              echo ""
+            fi
             echo "---"
             echo ""
             echo "## 下载"
             echo ""
-            echo "| 平台 | 说明 |"
-            echo "|:-----|:-----|"
-            echo "| [Windows x64](${BASE_URL}/Aura_${VERSION_NUM}_x64-setup.exe) | Windows x64 安装包 |"
-            echo "| [Windows x86](${BASE_URL}/Aura_${VERSION_NUM}_x86-setup.exe) | Windows x86 安装包 |"
-            echo "| [Windows ARM64](${BASE_URL}/Aura_${VERSION_NUM}_arm64-setup.exe) | Windows ARM64 安装包 |"
-            echo "| [Windows WebView2](${BASE_URL}/Aura_${VERSION_NUM}_x64-setup-webview2.exe) | Windows WebView2 在线版 |"
-            echo "| [Windows 离线](${BASE_URL}/Aura_${VERSION_NUM}_x64-setup-webview2-offline.exe) | Windows WebView2 离线包 |"
-            echo "| [macOS Intel](${BASE_URL}/Aura_${VERSION_NUM}_x64.dmg) | macOS Intel |"
-            echo "| [macOS Apple Silicon](${BASE_URL}/Aura_${VERSION_NUM}_aarch64.dmg) | macOS Apple Silicon |"
-            echo "| [Linux AppImage](${BASE_URL}/Aura_${VERSION_NUM}_amd64.AppImage) | Linux 通用 |"
-            echo "| [Linux deb](${BASE_URL}/Aura_${VERSION_NUM}_amd64.deb) | Debian/Ubuntu |"
-            echo "| [Linux rpm](${BASE_URL}/Aura_${VERSION_NUM}-1.x86_64.rpm) | Fedora/RHEL |"
-            echo "| [Android Universal](${BASE_URL}/aura-android-universal.apk) | Android 通用 |"
-            echo "| [Android ARM64](${BASE_URL}/aura-android-arm64.apk) | Android ARM64 |"
-            echo "| [Android ARMv7](${BASE_URL}/aura-android-arm.apk) | Android ARMv7 |"
-            echo "| [Android x86_64](${BASE_URL}/aura-android-x86_64.apk) | Android x86_64 |"
+            echo "### Windows"
+            echo ""
+            echo "| 下载 | 适用 |"
+            echo "|:----:|:-----|"
+            W="${SHIELD}/Windows"
+            WQ="${STYLE}&logo=windows&logoColor=white"
+            echo "| [![Windows x64](${W}-x64-0078D6?${WQ})](${BASE_URL}/Aura_${VERSION_NUM}_x64-setup.exe) | 绝大多数 Windows 10/11 设备，首选 |"
+            echo "| [![Windows x86](${W}-x86-0078D6?${WQ})](${BASE_URL}/Aura_${VERSION_NUM}_x86-setup.exe) | 32 位系统 |"
+            echo "| [![Windows ARM64](${W}-ARM64-0078D6?${WQ})](${BASE_URL}/Aura_${VERSION_NUM}_arm64-setup.exe) | 骁龙等 ARM 设备 |"
+            echo "| [![WebView2](${W}-WebView2-0078D6?${WQ})](${BASE_URL}/Aura_${VERSION_NUM}_x64-setup-webview2.exe) | 缺少 WebView2 运行时，安装时联网补齐 |"
+            echo "| [![WebView2 Offline](${W}-WebView2%20Offline-0078D6?${WQ}&labelColor=1f6feb)](${BASE_URL}/Aura_${VERSION_NUM}_x64-setup-webview2-offline.exe) | 内置 WebView2 运行时，无网环境可用 |"
+            echo "| [![MSI x64](${W}-MSI%20x64-0078D6?${WQ})](${BASE_URL}/Aura_${VERSION_NUM}_x64_en-US.msi) | 需要 MSI 的批量部署场景 |"
+            echo ""
+            echo "> ARM64 与 x86 也提供 MSI：[arm64](${BASE_URL}/Aura_${VERSION_NUM}_arm64_en-US.msi) · [x86](${BASE_URL}/Aura_${VERSION_NUM}_x86_en-US.msi)"
+            echo ""
+            echo "### macOS"
+            echo ""
+            echo "| 下载 | 适用 |"
+            echo "|:----:|:-----|"
+            echo "| [![Apple Silicon](${SHIELD}/macOS-Apple%20Silicon-000000?${STYLE}&logo=apple&logoColor=white)](${BASE_URL}/Aura_${VERSION_NUM}_aarch64.dmg) | M 系列芯片 |"
+            echo "| [![Intel](${SHIELD}/macOS-Intel-000000?${STYLE}&logo=apple&logoColor=white)](${BASE_URL}/Aura_${VERSION_NUM}_x64.dmg) | Intel 芯片 |"
+            echo ""
+            echo "> 未经 Apple 公证，首次打开请在「系统设置 → 隐私与安全性」里放行，或执行 \`xattr -cr /Applications/Aura.app\`。"
+            echo ""
+            echo "### Linux"
+            echo ""
+            echo "| 下载 | 适用 |"
+            echo "|:----:|:-----|"
+            echo "| [![AppImage](${SHIELD}/Linux-AppImage-FCC624?${STYLE}&logo=linux&logoColor=black)](${BASE_URL}/Aura_${VERSION_NUM}_amd64.AppImage) | 免安装，各发行版通用 |"
+            echo "| [![deb](${SHIELD}/Debian-deb-A81D33?${STYLE}&logo=debian&logoColor=white)](${BASE_URL}/Aura_${VERSION_NUM}_amd64.deb) | Debian / Ubuntu |"
+            echo "| [![rpm](${SHIELD}/Fedora-rpm-EE0000?${STYLE}&logo=redhat&logoColor=white)](${BASE_URL}/Aura-${VERSION_NUM}-1.x86_64.rpm) | Fedora / RHEL / openSUSE |"
+            echo ""
+            echo "### Android"
+            echo ""
+            echo "| 下载 | 适用 |"
+            echo "|:----:|:-----|"
+            A="${SHIELD}/Android"
+            AQ="${STYLE}&logo=android&logoColor=white"
+            echo "| [![Universal](${A}-Universal-3DDC84?${AQ})](${BASE_URL}/aura-android-universal.apk) | 不确定机型就选这个，体积最大 |"
+            echo "| [![ARM64](${A}-ARM64-3DDC84?${AQ})](${BASE_URL}/aura-android-arm64.apk) | 2018 年后的主流手机 |"
+            echo "| [![ARMv7](${A}-ARMv7-3DDC84?${AQ})](${BASE_URL}/aura-android-arm.apk) | 老旧 32 位设备 |"
+            echo "| [![x86_64](${A}-x86__64-3DDC84?${AQ})](${BASE_URL}/aura-android-x86_64.apk) | 模拟器 / x86 平板 |"
+            echo "| [![x86](${A}-x86-3DDC84?${AQ})](${BASE_URL}/aura-android-x86.apk) | 32 位 x86 模拟器 |"
+            echo ""
+            echo "> 最低 Android 7.0（API 24）。APK 已用项目密钥签名，从旧的未签名版本升级需要先卸载。"
+            echo ""
+            echo "---"
+            echo ""
+            echo "## 校验"
+            echo ""
+            echo "所有安装包的 SHA256 见 [\`SHA256SUMS.txt\`](${BASE_URL}/SHA256SUMS.txt)："
+            echo ""
+            echo '```bash'
+            echo "sha256sum -c SHA256SUMS.txt --ignore-missing"
+            echo '```'
             echo ""
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
@@ -446,5 +652,6 @@ jobs:
             artifacts/**/*.msi
             artifacts/**/*.dmg
             artifacts/**/*.apk
+            SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

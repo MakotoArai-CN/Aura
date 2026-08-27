@@ -92,7 +92,9 @@
   ] as const;
 
   const PROXY_PROTOCOLS = ["http", "https", "socks5", "socks4"];
-  const APP_VERSION = "1.0.0";
+  // 构建时由 vite 从 package.json 注入，别再写死字面量：漏改会让界面显示旧版本号，
+  // 更新检查也会把当前版本误判成有新版可升。
+  const APP_VERSION = __APP_VERSION__;
   const GITHUB_REPO = "MakotoArai-CN/Aura";
   const LYRIC_COLOR_SCHEMES = [
     { id: "classic", name: "经典白", preview: "linear-gradient(135deg, #ffffff, #d7e1ff)" },

@@ -1,8 +1,14 @@
+import { readFileSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, type Plugin } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
 const host = process.env.TAURI_DEV_HOST;
+// 版本号只从 package.json 读一次，注入成 __APP_VERSION__。设置页以前写死了一个字面量，
+// 升版本时漏改，界面显示旧号、更新检查还会把当前版本当成有新版可升。
+const APP_VERSION = (
+  JSON.parse(readFileSync(new URL("./package.json", import.meta.url), "utf8")) as { version: string }
+).version;
 const DEV_HTTP_PROXY_PATH = "/__listen1_http_request";
 const MOBILE_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_3 like Mac OS X) AppleWebKit/534.30 (KHTML, like Gecko) Version/4.0 Mobile Safari/534.30";
 const DESKTOP_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/72.0.3626.119 Safari/537.36";
@@ -214,6 +220,9 @@ function listen1HttpProxy(): Plugin {
 export default defineConfig({
   plugins: [listen1HttpProxy(), svelte()],
   clearScreen: false,
+  define: {
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
+  },
   server: {
     port: 1420,
     strictPort: true,
