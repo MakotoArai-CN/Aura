@@ -20,8 +20,11 @@
     openExternalUrl,
     setEffectTierOverride,
     isTauriRuntime,
+    miniSupported,
     type UpdateAsset,
   } from "../../lib/tauri";
+  import { enterLiteMode, PREPARE_AHEAD } from "../../lib/liteMode";
+  import { playerState } from "../../lib/stores/player";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "../../lib/shortcuts";
   import { SEARCHABLE_SOURCES } from "../../lib/providers/index";
   import { localmusic } from "../../lib/providers/localmusic";
@@ -71,6 +74,34 @@
     setEffectTierOverride(id).catch((error) => {
       console.warn("[SettingsView] 效果档位写入 Rust 失败", error);
     });
+  }
+
+  /**
+   * 轻量模式：把 WebView 整个销毁，换成一个自绘的原生窗口继续放歌。
+   *
+   * 切换前要把队列、歌词、封面、以及当前起若干首的音频全部落盘——WebView 一没，
+   * provider 解析和歌词抓取的能力就都没了。这一步会走网络，慢，所以要有忙碌态。
+   */
+  let liteSupported = $state(false);
+  let liteBusy = $state(false);
+  let liteQueueSize = $derived(($playerState.playlist ?? []).length);
+
+  async function switchToLiteMode() {
+    if (liteBusy) return;
+    if (liteQueueSize === 0) {
+      toast.warn("播放队列是空的，先放一首歌再切轻量模式");
+      return;
+    }
+    liteBusy = true;
+    try {
+      await enterLiteMode();
+    } catch (error) {
+      // 到这里说明原生窗口没建起来，WebView 还活着，原地留在完整模式即可。
+      console.warn("[SettingsView] 进入轻量模式失败", error);
+      toast.error("进入轻量模式失败，已留在当前界面");
+    } finally {
+      liteBusy = false;
+    }
   }
 
   const THEMES: Array<{ id: AppSettings["theme"]; name: string; desc: string; color: string }> = [
@@ -142,6 +173,9 @@
         proxyProtocol = cfg.protocol ?? "http";
       }
     } catch {}
+
+    // 只有 Windows 有原生窗口实现，其他平台不显示入口。
+    liteSupported = isTauriRuntime() && (await miniSupported().catch(() => false));
 
     const [musicDir, cacheDir] = await Promise.all([
       defaultMusicDir().catch(() => ""),
@@ -986,6 +1020,33 @@
       <button type="button" class="action-btn primary" class:saved={proxySaved} onclick={applyProxy}>{proxySaved ? "已应用" : "应用"}</button>
     </div>
   </section>
+
+  {#if liteSupported}
+    <section class="settings-section">
+      <div class="section-head">
+        <h2>轻量模式</h2>
+        <span>销毁 WebView，换成原生窗口继续放歌</span>
+      </div>
+      <div class="setting-row">
+        <div>
+          <strong>进入轻量模式</strong>
+          <span>
+            {liteBusy
+              ? `正在准备当前起 ${PREPARE_AHEAD} 首的直链、歌词、封面和音频缓存…`
+              : liteQueueSize === 0
+                ? "播放队列是空的，先放一首歌"
+                : `内存占用大幅下降，只保留播放、进度、歌词和队列；搜索和设置需返回完整模式（队列 ${liteQueueSize} 首）`}
+          </span>
+        </div>
+        <button
+          type="button"
+          class="action-btn primary"
+          disabled={liteBusy || liteQueueSize === 0}
+          onclick={switchToLiteMode}
+        >{liteBusy ? "准备中…" : "切换"}</button>
+      </div>
+    </section>
+  {/if}
 
   <section class="settings-section">
     <div class="section-head">

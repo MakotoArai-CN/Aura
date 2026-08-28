@@ -372,3 +372,33 @@ export const getUpdateAssets = (version: string): Promise<UpdateAsset[]> =>
 
 export const downloadAndRunUpdate = (url: string, filename: string): Promise<void> =>
   invoke("download_and_run_update", { url, filename });
+
+/**
+ * 轻量模式（零 WebView 的原生迷你播放器）。
+ *
+ * 这几个调用都是"切换前的准备"：WebView 一销毁，provider 解析、歌词抓取、
+ * 封面代理就都没了，所以封面得先下成本地文件、音频得先进磁盘缓存。
+ * 类型只在编译期用到，`import type` 不会和 liteMode.ts 形成运行时循环依赖。
+ */
+export const miniSupported = (): Promise<boolean> => invoke("mini_supported");
+
+/** 下载封面到本地，返回绝对路径。原生窗口没法加载远端图片。 */
+export const miniFetchCover = (url: string): Promise<string | null> =>
+  invoke("mini_fetch_cover", { url });
+
+/** 把整首歌拉进磁盘缓存。直链带时效签名，过期后原生侧无从续命。 */
+export const miniPrecacheAudio = (cacheId: string, url: string): Promise<string | null> =>
+  invoke("mini_precache_audio", { cacheId, url });
+
+/** 进入轻量模式。Rust 先建好原生窗口，成功之后才销毁 WebView。 */
+export const miniEnter = (snapshot: import("./liteMode").LiteSnapshot): Promise<void> =>
+  invoke("mini_enter", { snapshot });
+
+/**
+ * 取回原生窗口退出时写下的快照，取完即删（删除在 Rust 侧做）。
+ * WebView 是重新建的，内存里什么都没剩下，进度和当前下标只能从这儿拿。
+ */
+export const miniLoadSnapshot = (): Promise<import("./liteMode").LiteSnapshot | null> => {
+  if (!isTauriRuntime()) return Promise.resolve(null);
+  return invoke("mini_load_snapshot");
+};

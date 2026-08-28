@@ -38,6 +38,27 @@ tauri-plugin-global-shortcut = "2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# 轻量模式（零 WebView 的原生迷你播放器）用到的系统接口：
+# Direct2D/DirectWrite/WIC 自绘界面，WinRT MediaPlayer 交给系统解码与输出。
+# 这些都是系统自带的，不额外增加运行时依赖。
+windows = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Graphics_Direct2D",
+  "Win32_Graphics_Direct2D_Common",
+  "Win32_Graphics_DirectWrite",
+  "Win32_Graphics_Dwm",
+  "Win32_Graphics_Imaging",
+  "Win32_Graphics_Dxgi_Common",
+  "Win32_System_Com",
+  "Win32_System_LibraryLoader",
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_HiDpi",
+  "Foundation",
+  "Media_Core",
+  "Media_Playback",
+] }
 
 [features]
 default = ["custom-protocol"]

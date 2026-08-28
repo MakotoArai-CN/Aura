@@ -31,6 +31,7 @@
   import { startEffectWatchdog } from "./lib/effectWatchdog";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "./lib/shortcuts";
   import { bindPlayerKeyboard } from "./lib/keyboard";
+  import { resumeFromLiteSnapshot } from "./lib/liteMode";
   import { localmusic } from "./lib/providers/localmusic";
 
   type View =
@@ -119,6 +120,12 @@
       );
     }
     startEffectWatchdog();
+
+    // 刚从轻量模式回来的话，接着原生窗口停下的那首那一秒继续放。
+    // 快照取一次即被删除，普通冷启动这里什么都不会发生。
+    void resumeFromLiteSnapshot().catch((error) =>
+      console.warn("[App] 恢复轻量模式进度失败", error)
+    );
 
     let unlisten: (() => void) | null = null;
     let disposed = false;

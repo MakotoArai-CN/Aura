@@ -2,6 +2,7 @@ mod cache;
 mod device_tier;
 mod download;
 mod local_music;
+mod mini;
 mod proxy;
 mod system_stats;
 mod update;
@@ -165,6 +166,12 @@ pub fn run() {
             device_tier::set_effect_tier_override,
             update::download_and_run_update,
             update::get_update_assets,
+            mini::commands::mini_supported,
+            mini::commands::mini_fetch_cover,
+            mini::commands::mini_precache_audio,
+            mini::commands::mini_enter,
+            mini::commands::mini_exit,
+            mini::commands::mini_load_snapshot,
         ]);
 
     #[cfg(all(debug_assertions, desktop))]
@@ -176,9 +183,19 @@ pub fn run() {
         builder
     };
 
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|_app, event| {
+        // 轻量模式下 main 窗口是真被销毁的，不是隐藏。Tauri 默认"没有窗口就退出进程"，
+        // 而这时候原生迷你播放器还在另一个线程里放着歌，所以必须拦住。
+        if let tauri::RunEvent::ExitRequested { api, .. } = &event {
+            if mini::is_lite_active() {
+                api.prevent_exit();
+            }
+        }
+    });
 }
 
 fn stream_base_url_plugin<R: tauri::Runtime>(base_url: &str) -> tauri::plugin::TauriPlugin<R> {
