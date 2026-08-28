@@ -1,6 +1,7 @@
 <script lang="ts">
   import { playerState } from "../../lib/stores/player";
   import { settings } from "../../lib/stores/settings";
+  import { deviceTier } from "../../lib/stores/device";
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
   import { localmusic } from "../../lib/providers/localmusic";
   import { sizedImageUrl } from "../../lib/resourceUrl";
@@ -206,7 +207,7 @@
   </div>
 
   {#if isCurrent}
-    <div class="row-spectrum" class:active={isPlaying} aria-hidden="true">
+    <div class="row-spectrum" class:active={isPlaying && $deviceTier !== "low"} aria-hidden="true">
       <span></span><span></span><span></span><span></span><span></span><span></span>
     </div>
   {/if}

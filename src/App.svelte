@@ -299,7 +299,9 @@
       var(--color-body-bg);
   }
 
-  .wrap[data-theme="liquid-glass"] .body-bg::before {
+  /* 网格纹理带 mask-image，会把整个视口提升成一个独立合成层。低档位下直接不生成
+     这个伪元素——纹理是纯装饰，代价却是一张全屏图层。 */
+  .wrap[data-theme="liquid-glass"]:not([data-visual="low"]) .body-bg::before {
     content: "";
     position: fixed;
     inset: 0;

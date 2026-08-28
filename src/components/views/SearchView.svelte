@@ -334,7 +334,6 @@
     box-shadow: 0 4px 12px -4px rgba(0,0,0,0.2);
     transition: transform var(--dur-med) var(--ease-spring),
                 box-shadow var(--dur-med) var(--ease-soft);
-    will-change: transform;
   }
 
   .u-cover:hover { transform: translateY(-2px) scale(1.01); box-shadow: var(--shadow-lift); }

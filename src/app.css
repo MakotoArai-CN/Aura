@@ -454,6 +454,19 @@
   --lg-ctl-shadow-hover: none;
 }
 
+/* low 档：掐掉所有「装饰性常驻动画」。
+   这些是 animation-iteration-count: infinite，只要元素在 DOM 里就按屏幕刷新率
+   重绘（骨架屏还会连带整块渐变重新光栅化），是低配机上「界面静止但 GPU 一直忙」
+   的实际来源。变量层面把模糊关掉并不影响它们，必须单独按选择器压掉。
+   刻意保留 .spinner / .mini-spinner：转圈是「正在加载」唯一的反馈通道，
+   停下来用户会以为卡死，而且它只在请求进行中存在，不是常驻开销。 */
+.wrap[data-visual="low"] .shimmer-bg,
+.wrap[data-visual="low"] .skeleton,
+.wrap[data-visual="low"] .title-skeleton,
+.wrap[data-visual="low"] .dot {
+  animation: none;
+}
+
 html, body { height: 100%; width: 100%; overflow: hidden; background: transparent; }
 body { color: var(--text-default-color); }
 
