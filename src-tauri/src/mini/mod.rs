@@ -42,6 +42,12 @@ pub fn begin_shutdown() {
     SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
 }
 
+/// 每次进轻量模式都清一遍旗子。上一轮的关机意图不该泄漏到下一轮，
+/// 否则再点「回到完整模式」会变成直接退进程。
+pub fn clear_shutdown() {
+    SHUTTING_DOWN.store(false, std::sync::atomic::Ordering::Release);
+}
+
 pub fn is_shutting_down() -> bool {
     SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire)
 }

@@ -162,6 +162,7 @@ pub async fn mini_precache_audio(cache_id: String, url: String) -> Result<Option
 /// 要是反过来先销毁窗口，一旦建窗失败就只剩托盘图标了。
 #[tauri::command]
 pub async fn mini_enter(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), String> {
+    crate::mini::clear_shutdown();
     let mut snapshot = snapshot;
     snapshot.normalize();
     snapshot::save(&snapshot)?;
