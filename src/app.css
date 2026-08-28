@@ -616,6 +616,19 @@ input, select, textarea { font: inherit; color: inherit; }
   padding: 3px;
 }
 
+/* ── 音乐源按钮 ────────────────────────────────────
+   同样的坑：.source-button 的圆角和背景都写在内层 .buttontext 上，而且只在
+   hover / 选中时才出现，外层自己一个圆角都没有，玻璃面就画成了直角方块。
+   玻璃面留在外层（尺寸随文字变化，不会跳），只补圆角；内层那层 hover 底色
+   在玻璃上是多余的第二层，会把字糊掉，这里去掉。 */
+.wrap[data-theme="liquid-glass"][data-theme] .source-button {
+  border-radius: var(--radius);
+}
+
+.wrap[data-theme="liquid-glass"][data-theme] .source-button:hover .buttontext {
+  background-color: transparent;
+}
+
 /* ── 侧栏导航行 ────────────────────────────────────
    圆角与背景都在内层 .sidebar-block 上，所以玻璃面也画在它上面。
    hover / 选中都不能推到接近纯白：选中行原本是白色文字，白底白字看不清。
