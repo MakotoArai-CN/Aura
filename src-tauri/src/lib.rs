@@ -39,16 +39,6 @@ pub fn run() {
         std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args);
     }
 
-    // Linux/WebKitGTK 没有命令行参数入口，只认环境变量。非 high 档关掉加速合成，
-    // 否则即使 CSS 已经降到纯色，WebKit 仍然会为整页维护 GPU 合成层——这正是
-    // "档位是低但 GPU 还在跑"的来源。同样必须在第一个 WebView 创建前设置。
-    #[cfg(target_os = "linux")]
-    {
-        if !device_tier::should_enable_gpu_acceleration() {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
-        }
-    }
-
     let builder = tauri::Builder::default()
         .plugin(stream_base_url_plugin(&stream_base_url))
         .plugin(login_window_helper_plugin())

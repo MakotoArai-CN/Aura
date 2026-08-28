@@ -6,7 +6,6 @@ import { localmusic } from "./providers/localmusic";
 import { isTauriRuntime, audioCacheLookup } from "./tauri";
 import { proxyResourceUrl } from "./resourceUrl";
 import { settings } from "./stores/settings";
-import { deviceTier } from "./stores/device";
 import { toast } from "./stores/toast";
 
 const BROKEN_STREAM_PREFIX = "http://stream.localhost/";
@@ -338,11 +337,7 @@ class Listen1Player {
 
   private startProgressLoop() {
     if (this.progressTimer) return;
-    // 低档位降到 1Hz：每 tick 都要写 playbackClock，进度条与歌词都会跟着重算/重绘。
-    // 250ms 在低配机上就是每秒 4 次无谓的布局+合成，而进度条本身按秒显示，
-    // 1Hz 肉眼看不出差别。换档只在下一次开始播放时生效，够用且不需要重建定时器。
-    const interval = get(deviceTier) === "low" ? 1000 : 250;
-    this.progressTimer = setInterval(() => this.progressTick(), interval);
+    this.progressTimer = setInterval(() => this.progressTick(), 250);
     this.progressTick();
   }
 

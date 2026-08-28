@@ -69,10 +69,6 @@
   );
   // 相邻封面常驻显示；只有最低档才省掉这两张解码位图。
   let showAdjacentCovers = $derived($deviceTier !== "low");
-  // 最低档：封面唱片的常驻旋转必须停掉。它是 16s infinite 的 transform 动画，
-  // 只要在播放就会把封面提升成一个独立合成层并按屏幕刷新率重绘，是低配机上
-  // 「什么都没动 GPU 却一直在跑」的主要来源。
-  let lowTier = $derived($deviceTier === "low");
   // 播放页首次打开前不挂载（隐藏的完整歌词 DOM 常驻内存无意义），打开过一次后保持挂载以保留滑出动画。
   let nowPlayingEverOpened = $state(false);
   $effect(() => {
@@ -557,7 +553,7 @@
                   <img
                     src={currentCoverUrl}
                     alt=""
-                    class:liplay={$playerState.playing && !lowTier}
+                    class:liplay={$playerState.playing}
                     class:lipause={!$playerState.playing}
                   />
                 {:else}
