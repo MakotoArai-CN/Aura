@@ -59,12 +59,35 @@
     return `--cover-accent-rgb:${r},${g},${b};--cover-accent:rgb(${r} ${g} ${b});`;
   });
   let footerMainEl = $state<HTMLElement | null>(null);
+  /**
+   * 展开/收起动画进行中。
+   *
+   * `.footer-main` 的高度要在 0.5s 内从 100px 变到 100vh，而它身上挂着
+   * `backdrop-filter: var(--visual-backdrop)`（high 档是 saturate+blur20）。
+   * 尺寸每帧都变 → 合成器每帧都得重新为整块离屏纹理做一遍模糊，面积一路涨到全屏，
+   * present 直接落后半秒：状态早就切完了，画面还停在原处，然后一口气追上——
+   * 就是「点了没反应，然后突然快起来」。液态玻璃那层更糟，除了模糊还要跑
+   * feDisplacementMap，收起落定那一下还有一次 toDataURL 卡主线程。
+   *
+   * 所以动画期间把这些常驻滤镜全部摘掉，落定后再装回去：静止的两个姿态观感不变。
+   */
+  let footerResizing = $state(false);
+  $effect(() => {
+    // 读一下就够，isNowPlaying 一变就重跑
+    void isNowPlaying;
+    footerResizing = true;
+    // 兜底清除：transitionend 不一定发得出来（高度没实际变化、或元素被移出文档），
+    // 光靠事件会把滤镜永久关掉。时长跟 .footer-main 的 transition: 0.5s 对齐。
+    const timer = setTimeout(() => (footerResizing = false), 560);
+    return () => clearTimeout(timer);
+  });
   // 玻璃表面只在 high / ultra 档 + 液态玻璃主题下启用。现在走原生 backdrop-filter，
   // 没有 DOM 克隆也没有逐帧同步，因此播放中也可以常开（旧实现必须暂停时才敢开）。
   let glassSurfaceEnabled = $derived(
     ($deviceTier === "high" || $deviceTier === "ultra") &&
     $resolvedTheme === "liquidGlass" &&
     !isNowPlaying &&
+    !footerResizing &&
     Boolean($playerState.currentTrack)
   );
   // 相邻封面常驻显示；只有最低档才省掉这两张解码位图。
@@ -478,8 +501,13 @@
   <div
     class="footer-main"
     class:slidedown={isNowPlaying}
+    class:resizing={footerResizing}
     class:glass-surface={glassSurfaceEnabled}
     bind:this={footerMainEl}
+    ontransitionend={(e) => {
+      // 只认自己那条 height，子元素冒泡上来的一律不算
+      if (e.target === footerMainEl && e.propertyName === "height") footerResizing = false;
+    }}
   >
     <LiquidGlassSurface target={footerMainEl} enabled={glassSurfaceEnabled} />
     {#if nowPlayingEverOpened}
@@ -913,7 +941,10 @@
     border-radius: 10px;
     display: flex;
     flex: 1;
-    transition: 0.5s;
+    /* 只让高度参与过渡。原来是 `0.5s` 简写（等于 all），而 backdrop-filter 也是可动画
+       属性 —— 动画期间摘掉模糊、落定后装回去这两步都会被插值成 0.5s 的模糊半径动画，
+       等于把想省掉的逐帧模糊又原样加了回来。这块只有 height 需要动。 */
+    transition: height 0.5s;
     /* 视觉档位变量（app.css 按 data-visual 定义）：
        high=毛玻璃恢复最佳效果；mid/low=半透明底色省掉常驻模糊合成 */
     -webkit-backdrop-filter: var(--visual-backdrop);
@@ -931,6 +962,16 @@
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background-color: transparent;
+  }
+
+  /* 展开/收起动画期间摘掉所有常驻模糊（含展开态那层 footerwrap 的）。
+     理由见 script 里 footerResizing 的注释：这块的高度每帧都在变，模糊面积一路涨到
+     全屏，合成器跟不上，画面就落在状态后面。
+     !important 是因为 .footer.expanded .footerwrap 跟这条同特异性但写在后面。 */
+  .footer-main.resizing,
+  .footer-main.resizing .footerwrap {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
   }
 
   .footer-main::before {
