@@ -11,10 +11,15 @@
 
   let filtered = $derived.by(() => {
     const q = query.trim().toLowerCase();
-    if (!q) return $recentPlayed;
-    return $recentPlayed.filter(({ track }) =>
-      `${track.title} ${track.artist} ${track.album ?? ""}`.toLowerCase().includes(q),
-    );
+    const list = q
+      ? $recentPlayed.filter(({ track }) =>
+          `${track.title} ${track.artist} ${track.album ?? ""}`.toLowerCase().includes(q),
+        )
+      : $recentPlayed;
+    // 显式按时间倒序，不指望 store 的天然顺序。下面分组只比较相邻两条，前提是同一天的记录
+    // 在数组里连续；而 record() 只管把新的放到最前面、不看时间戳，系统时间往回跳过一次午夜
+    // 就能打破这个前提，同一天分到两个组 → key 重复 → 整个视图白屏，连清空按钮都没了。
+    return [...list].sort((a, b) => b.playedAt - a.playedAt);
   });
 
   /** 当天零点。分组按它切，也拿它当 {#each} 的 key——显示文案不能当 key，见下。 */

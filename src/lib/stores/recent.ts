@@ -29,9 +29,11 @@ function load(): RecentEntry[] {
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    // 存过的数据也可能是坏的（手改、旧版本格式），逐条筛掉没有 id 的
+    // 存过的数据也可能是坏的（手改、旧版本格式），逐条筛掉没有 id 的。
+    // 时间戳用 Number.isFinite 而不是 typeof === "number"：NaN 也是 number，
+    // 拿它算出来的是 Invalid Date，分组 key 变成 NaN，两条就能把整个视图撞成白屏。
     return parsed.filter(
-      (e): e is RecentEntry => Boolean(e?.track?.id) && typeof e.playedAt === "number",
+      (e): e is RecentEntry => Boolean(e?.track?.id) && Number.isFinite(e.playedAt),
     );
   } catch {
     return [];
