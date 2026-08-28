@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,7 +46,7 @@ pub struct CacheStats {
 pub struct CachedBytes {
     pub status: u16,
     pub headers: Vec<(String, String)>,
-    pub body: Vec<u8>,
+    pub body: crate::proxy::StreamBody,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -246,9 +246,7 @@ fn response_from_file(
     };
 
     let read_len = end - start + 1;
-    let mut body = vec![0; read_len as usize];
     file.seek(SeekFrom::Start(start)).ok()?;
-    file.read_exact(&mut body).ok()?;
 
     let mut headers = vec![
         ("Content-Type".into(), entry.content_type.clone()),
@@ -272,7 +270,10 @@ fn response_from_file(
     Some(CachedBytes {
         status,
         headers,
-        body,
+        body: crate::proxy::StreamBody::File {
+            file,
+            len: read_len,
+        },
     })
 }
 

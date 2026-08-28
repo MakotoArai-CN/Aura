@@ -47,11 +47,51 @@ fn proxy_config() -> &'static Mutex<ProxyConfig> {
     PROXY_CONFIG.get_or_init(|| Mutex::new(ProxyConfig::default()))
 }
 
+/// 响应正文。磁盘上已有的内容（本地音乐、缓存命中）不进内存：只带一个已经 seek 到
+/// 起点的文件句柄和该读多少字节，由 write_stream_response 用固定缓冲区搬到 socket。
+///
+/// 原先两条路径都是 `vec![0; read_len]` + `read_exact` 把整段读进内存再一次 write_all。
+/// 播放器不带 Range 的首个请求 read_len 就是整个文件，一首 FLAC 是几十 MB 的分配 +
+/// 整文件 memcpy；而响应带 `Connection: close`、服务端又是每连接一个线程，播放器每次
+/// seek 都要把这一整套重来一遍。
+#[derive(Debug)]
+pub(crate) enum StreamBody {
+    Bytes(Vec<u8>),
+    File { file: std::fs::File, len: u64 },
+}
+
+impl StreamBody {
+    pub(crate) fn len(&self) -> u64 {
+        match self {
+            StreamBody::Bytes(bytes) => bytes.len() as u64,
+            StreamBody::File { len, .. } => *len,
+        }
+    }
+
+    /// 仅供必须交出 `Vec<u8>` 的场合（tauri 自定义协议只接受完整正文）。会把这一段
+    /// 真的读进内存，所以别在 TCP 那条路上用。
+    pub(crate) fn into_bytes(self) -> Vec<u8> {
+        match self {
+            StreamBody::Bytes(bytes) => bytes,
+            StreamBody::File { mut file, len } => {
+                let mut bytes = Vec::with_capacity(len as usize);
+                match std::io::Read::by_ref(&mut file)
+                    .take(len)
+                    .read_to_end(&mut bytes)
+                {
+                    Ok(_) => bytes,
+                    Err(_) => Vec::new(),
+                }
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct StreamResponse {
     pub(crate) status: u16,
     pub(crate) headers: Vec<(String, String)>,
-    pub(crate) body: Vec<u8>,
+    pub(crate) body: StreamBody,
 }
 
 impl StreamResponse {
@@ -59,7 +99,7 @@ impl StreamResponse {
         Self {
             status,
             headers: vec![("Access-Control-Allow-Origin".into(), "*".into())],
-            body: Vec::new(),
+            body: StreamBody::Bytes(Vec::new()),
         }
     }
 }
@@ -503,11 +543,9 @@ fn local_file_stream_response(
     };
 
     let read_len = if len == 0 { 0 } else { end - start + 1 };
-    let mut bytes = vec![0; read_len as usize];
     if read_len > 0 {
         file.seek(SeekFrom::Start(start))
             .map_err(|e| e.to_string())?;
-        file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
     }
 
     let mut headers = vec![
@@ -532,7 +570,10 @@ fn local_file_stream_response(
     Ok(StreamResponse {
         status,
         headers,
-        body: bytes,
+        body: StreamBody::File {
+            file,
+            len: read_len,
+        },
     })
 }
 
@@ -541,7 +582,7 @@ fn tauri_response_from_stream_response(response: StreamResponse) -> tauri::http:
     for (name, value) in response.headers {
         builder = builder.header(name, value);
     }
-    builder.body(response.body).unwrap()
+    builder.body(response.body.into_bytes()).unwrap()
 }
 
 fn local_file_response(
@@ -609,7 +650,7 @@ fn handle_stream_connection(mut stream: TcpStream) {
         write_stream_response(
             &mut stream,
             StreamResponse {
-                body: Vec::new(),
+                body: StreamBody::Bytes(Vec::new()),
                 ..response
             },
         );
@@ -740,7 +781,11 @@ fn full_body_stream_response(
         }
     }
 
-    StreamResponse { status, headers, body }
+    StreamResponse {
+        status,
+        headers,
+        body: StreamBody::Bytes(body),
+    }
 }
 
 fn status_text(status: u16) -> &'static str {
@@ -783,8 +828,20 @@ fn write_stream_response(stream: &mut TcpStream, mut response: StreamResponse) {
     }
     head.push_str("\r\n");
 
-    let _ = stream.write_all(head.as_bytes());
-    let _ = stream.write_all(&response.body);
+    if stream.write_all(head.as_bytes()).is_err() {
+        return;
+    }
+    match response.body {
+        StreamBody::Bytes(bytes) => {
+            let _ = stream.write_all(&bytes);
+        }
+        // 固定 64KB 缓冲区搬运，内存占用与文件大小无关。播放器中途放弃（换歌、seek）
+        // 时写入会失败，这里直接停下——原先是整段已经读进内存了，白读的部分省不掉。
+        StreamBody::File { file, len } => {
+            let mut reader = std::io::BufReader::with_capacity(64 * 1024, file.take(len));
+            let _ = std::io::copy(&mut reader, stream);
+        }
+    }
     let _ = stream.flush();
 }
 
@@ -917,7 +974,7 @@ pub async fn handle_stream_protocol(
         for (name, value) in cached.headers {
             builder = builder.header(name, value);
         }
-        return Ok(builder.body(cached.body).unwrap());
+        return Ok(builder.body(cached.body.into_bytes()).unwrap());
     }
 
     let client = match build_client() {
@@ -991,10 +1048,136 @@ pub async fn handle_stream_protocol(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_range_covers_whole, local_content_type, should_cache_stream_response,
-        should_fetch_full_for_cache,
+        content_range_covers_whole, ensure_stream_server, local_content_type,
+        should_cache_stream_response, should_fetch_full_for_cache,
     };
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
     use std::path::PathBuf;
+
+    /// 发一个裸 HTTP 请求给本机流服务器，返回 (状态码, 响应头, 正文)。
+    /// 不用 reqwest：这里要验的正是自己手写的那套 HTTP 输出，用高层客户端会把
+    /// Content-Length 与正文长度不一致之类的问题吞掉。
+    fn raw_get(base: &str, encoded_target: &str, range: Option<&str>, method: &str) -> (u16, Vec<(String, String)>, Vec<u8>) {
+        let addr = base
+            .trim_start_matches("http://")
+            .split('/')
+            .next()
+            .expect("base url has an authority");
+        let mut stream = TcpStream::connect(addr).expect("connect to stream server");
+        let mut request = format!(
+            "{method} /stream/{encoded_target} HTTP/1.1\r\nHost: {addr}\r\n"
+        );
+        if let Some(range) = range {
+            request.push_str(&format!("Range: {range}\r\n"));
+        }
+        request.push_str("Connection: close\r\n\r\n");
+        stream.write_all(request.as_bytes()).expect("write request");
+        stream.flush().expect("flush request");
+
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("read response");
+
+        let split = raw
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .expect("response has a header terminator");
+        let head = String::from_utf8_lossy(&raw[..split]).to_string();
+        let body = raw[split + 4..].to_vec();
+
+        let mut lines = head.lines();
+        let status = lines
+            .next()
+            .and_then(|line| line.split_whitespace().nth(1))
+            .and_then(|code| code.parse::<u16>().ok())
+            .expect("response has a status code");
+        let headers = lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.trim().to_ascii_lowercase(), value.trim().to_string()))
+            .collect();
+        (status, headers, body)
+    }
+
+    fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        headers
+            .iter()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    /// 本机文件按范围流式输出：正文一个字节都不能错，Content-Length 必须与实际长度一致。
+    ///
+    /// 这条用例是为"正文改成不进内存、按 64KB 缓冲区直接搬到 socket"兜底的：文件故意
+    /// 取 300KB，跨好几轮缓冲区，只测小文件的话一轮就搬完，缓冲区边界的错位看不出来。
+    #[test]
+    fn streams_local_file_bytes_and_ranges_exactly() {
+        let base = ensure_stream_server().expect("stream server starts");
+
+        let dir = std::env::temp_dir().join("aura-stream-body-test");
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let path = dir.join("sample.mp3");
+        // 伪随机但可复现的内容：全 0 或递增字节会让"错位一段"仍然巧合通过。
+        let expected: Vec<u8> = (0..300_000u32)
+            .map(|i| (i.wrapping_mul(2654435761) >> 13) as u8)
+            .collect();
+        std::fs::write(&path, &expected).expect("write temp file");
+
+        let file_url = format!("file:///{}", path.to_string_lossy().replace('\\', "/"));
+        let encoded = urlencoding::encode(&file_url).to_string();
+
+        // 1) 不带 Range → 200 + 整个文件
+        let (status, headers, body) = raw_get(base, &encoded, None, "GET");
+        assert_eq!(status, 200);
+        assert_eq!(
+            header_value(&headers, "content-length"),
+            Some(expected.len().to_string().as_str())
+        );
+        assert_eq!(header_value(&headers, "accept-ranges"), Some("bytes"));
+        assert_eq!(body.len(), expected.len(), "整段长度");
+        assert_eq!(body, expected, "整段内容");
+
+        // 2) 中段 Range → 206 + 恰好那一段（跨越 64KB 缓冲区边界）
+        let (start, end) = (1000usize, 200_047usize);
+        let (status, headers, body) = raw_get(base, &encoded, Some("bytes=1000-200047"), "GET");
+        assert_eq!(status, 206);
+        assert_eq!(
+            header_value(&headers, "content-range"),
+            Some(format!("bytes {}-{}/{}", start, end, expected.len()).as_str())
+        );
+        assert_eq!(body, expected[start..=end], "中段内容");
+
+        // 3) 后缀 Range（播放器探测尾部元数据时会用）
+        let (status, _, body) = raw_get(base, &encoded, Some("bytes=-100"), "GET");
+        assert_eq!(status, 206);
+        assert_eq!(body, expected[expected.len() - 100..], "尾部 100 字节");
+
+        // 4) HEAD → 正文为空，但 Content-Length 仍要报整段长度
+        let (status, headers, body) = raw_get(base, &encoded, None, "HEAD");
+        assert_eq!(status, 200);
+        assert!(body.is_empty(), "HEAD 不该带正文");
+        assert_eq!(
+            header_value(&headers, "content-length"),
+            Some(expected.len().to_string().as_str())
+        );
+
+        // 5) 起点越界 → 当作无 Range 处理，仍然给整段（parse_range_header 返回 None）
+        let (status, _, body) = raw_get(base, &encoded, Some("bytes=999999999-"), "GET");
+        assert_eq!(status, 200);
+        assert_eq!(body.len(), expected.len());
+
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_dir(&dir);
+    }
+
+    #[test]
+    fn missing_local_file_is_a_404() {
+        let base = ensure_stream_server().expect("stream server starts");
+        let missing = std::env::temp_dir().join("aura-stream-body-test-does-not-exist.mp3");
+        let file_url = format!("file:///{}", missing.to_string_lossy().replace('\\', "/"));
+        let (status, _, body) = raw_get(base, &urlencoding::encode(&file_url), None, "GET");
+        assert_eq!(status, 404);
+        assert!(body.is_empty());
+    }
 
     #[test]
     fn serves_local_covers_as_images() {
