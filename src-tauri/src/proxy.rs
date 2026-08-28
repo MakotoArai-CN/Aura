@@ -23,7 +23,7 @@ pub(crate) fn shared_runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProxyConfig {
     pub mode: String, // "system" | "direct" | "manual"
     pub host: Option<String>,
@@ -58,13 +58,17 @@ fn proxy_config() -> &'static Mutex<ProxyConfig> {
 pub(crate) enum StreamBody {
     Bytes(Vec<u8>),
     File { file: std::fs::File, len: u64 },
+    Remote(Box<RemoteBody>),
 }
 
 impl StreamBody {
-    pub(crate) fn len(&self) -> u64 {
+    /// 正文长度，未知时返回 None（只有远端响应且上游没给长度时才会未知）。
+    /// 未知就不发 `Content-Length`，靠 `Connection: close` 定界。
+    pub(crate) fn known_len(&self) -> Option<u64> {
         match self {
-            StreamBody::Bytes(bytes) => bytes.len() as u64,
-            StreamBody::File { len, .. } => *len,
+            StreamBody::Bytes(bytes) => Some(bytes.len() as u64),
+            StreamBody::File { len, .. } => Some(*len),
+            StreamBody::Remote(remote) => remote.len,
         }
     }
 
@@ -83,6 +87,131 @@ impl StreamBody {
                     Err(_) => Vec::new(),
                 }
             }
+            // 构造上不会走到：Remote 只由 remote_stream_response 产出，而它只服务
+            // TCP 那条路。真被误用时不能在 runtime 线程里 block_on，否则直接 panic。
+            StreamBody::Remote(remote) => {
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    return Vec::new();
+                }
+                shared_runtime()
+                    .block_on(remote.resp.bytes())
+                    .map(|bytes| bytes.to_vec())
+                    .unwrap_or_default()
+            }
+        }
+    }
+}
+
+/// 远端响应：边收边写 socket。
+///
+/// 原先是 `resp.bytes().await` —— 必须等整段正文收完才写出第一个字节。一首几十 MB
+/// 的无损在慢链路上凑不满 `build_client()` 的 25s 总死线，整个请求就变成 `Err` →
+/// 上层 `unwrap_or_else` 兜成 500，播放器只能重发 Range 请求。听感正是「听着听着
+/// 断一下，然后又自己好了」。
+///
+/// 改成在连接线程上逐块 `chunk().await` + 逐块 `write_all`：写不动就不拉下一块，
+/// 天然背压；内存占用与文件大小无关。
+pub(crate) struct RemoteBody {
+    resp: reqwest::Response,
+    len: Option<u64>,
+    cache: Option<CacheTee>,
+}
+
+impl std::fmt::Debug for RemoteBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RemoteBody")
+            .field("len", &self.len)
+            .field("caching", &self.cache.is_some())
+            .finish()
+    }
+}
+
+/// 嗅探正文开头多少字节来判断「这其实是一段错误 JSON/HTML」。
+const CACHE_SNIFF_LEN: usize = 128;
+
+/// 缓存旁路写入：一边转发给播放器，一边落到 `.part` 临时文件。
+/// 只有干净读到 EOF、且字节数与上游声明的长度一致时才提交；换歌/seek 打断连接时
+/// 直接丢弃，避免把截断的音频当成完整缓存（那会让这首歌以后每次播放都是坏的）。
+#[derive(Debug)]
+pub(crate) struct CacheTee {
+    url: String,
+    content_type: String,
+    cache_id: Option<String>,
+    status: u16,
+    temp_path: PathBuf,
+    file: Option<std::fs::File>,
+    prefix: Vec<u8>,
+    healthy: bool,
+    committed: bool,
+}
+
+impl CacheTee {
+    fn new(url: &str, content_type: &str, cache_id: Option<&str>, status: u16) -> Option<Self> {
+        let temp_path = cache::begin_temp_write(url, cache_id)?;
+        let file = std::fs::File::create(&temp_path).ok()?;
+        Some(Self {
+            url: url.to_string(),
+            content_type: content_type.to_string(),
+            cache_id: cache_id.map(str::to_string),
+            status,
+            temp_path,
+            file: Some(file),
+            prefix: Vec::with_capacity(CACHE_SNIFF_LEN),
+            healthy: true,
+            committed: false,
+        })
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        if !self.healthy {
+            return;
+        }
+        if self.prefix.len() < CACHE_SNIFF_LEN {
+            let take = (CACHE_SNIFF_LEN - self.prefix.len()).min(chunk.len());
+            self.prefix.extend_from_slice(&chunk[..take]);
+        }
+        match self.file.as_mut() {
+            Some(file) => {
+                if file.write_all(chunk).is_err() {
+                    self.healthy = false;
+                }
+            }
+            None => self.healthy = false,
+        }
+    }
+
+    /// `complete` 表示这次转发确实拿到了完整正文。不完整就什么都不做，
+    /// 由 Drop 删掉 `.part`。
+    fn finish(&mut self, total_len: u64, complete: bool) {
+        let mut file = self.file.take();
+        let acceptable = complete
+            && self.healthy
+            && file.as_mut().is_some_and(|f| f.flush().is_ok())
+            && should_cache_stream_response(
+                self.status,
+                &self.content_type,
+                total_len,
+                &self.prefix,
+            );
+        // 先关句柄再改名：Windows 上被占用的文件 rename 会失败。
+        drop(file);
+        if acceptable {
+            self.committed = cache::commit_temp_write(
+                &self.temp_path,
+                &self.url,
+                &self.content_type,
+                total_len,
+                self.cache_id.as_deref(),
+            );
+        }
+    }
+}
+
+impl Drop for CacheTee {
+    fn drop(&mut self) {
+        self.file.take();
+        if !self.committed {
+            let _ = std::fs::remove_file(&self.temp_path);
         }
     }
 }
@@ -277,20 +406,63 @@ pub(crate) fn inject_headers(url: &str, headers: &mut HashMap<String, String>) {
     }
 }
 
-pub(crate) fn build_client() -> Result<reqwest::Client, String> {
+/// 进程级 client 缓存。原先每个请求都 `Client::builder().build()`，等于每次都新建
+/// 一个连接池：播放期间每个 Range 请求都要重做 TCP + TLS 握手，几十毫秒到几百毫秒
+/// 的抖动全落在音频缓冲上。代理配置没变就复用同一个 client（内部是 Arc，clone 很便宜）。
+type ClientPair = (ProxyConfig, reqwest::Client, reqwest::Client);
+
+fn client_cache() -> &'static Mutex<Option<ClientPair>> {
+    static CLIENTS: OnceLock<Mutex<Option<ClientPair>>> = OnceLock::new();
+    CLIENTS.get_or_init(|| Mutex::new(None))
+}
+
+fn cached_clients() -> Result<(reqwest::Client, reqwest::Client), String> {
     let config = proxy_config().lock().map(|g| g.clone()).unwrap_or_default();
+    let mut guard = client_cache().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((cached, api, stream)) = guard.as_ref() {
+        if *cached == config {
+            return Ok((api.clone(), stream.clone()));
+        }
+    }
+    let api = build_client_with_timeouts(&config, Some(Duration::from_secs(25)), None)?;
+    let stream = build_client_with_timeouts(&config, None, Some(Duration::from_secs(20)))?;
+    *guard = Some((config, api.clone(), stream.clone()));
+    Ok((api, stream))
+}
+
+/// 接口调用用的 client：25s 总死线（响应都很小，超时就是真的挂了）。
+pub(crate) fn build_client() -> Result<reqwest::Client, String> {
+    cached_clients().map(|(api, _)| api)
+}
+
+/// 音频转发专用 client。总死线对边下边播的大文件等于「下不完就报错」，
+/// 换成 read_timeout：只要上游还在持续给数据就不掐，真卡住 20s 才失败。
+pub(crate) fn build_stream_client() -> Result<reqwest::Client, String> {
+    cached_clients().map(|(_, stream)| stream)
+}
+
+fn build_client_with_timeouts(
+    config: &ProxyConfig,
+    total_timeout: Option<Duration>,
+    read_timeout: Option<Duration>,
+) -> Result<reqwest::Client, String> {
     let mode = if config.mode.is_empty() {
-        "direct".to_string()
+        "direct"
     } else {
-        config.mode.clone()
+        config.mode.as_str()
     };
 
     let mut builder = reqwest::Client::builder()
         .cookie_provider(cookie_jar())
-        .connect_timeout(Duration::from_secs(12))
-        .timeout(Duration::from_secs(25));
+        .connect_timeout(Duration::from_secs(12));
+    if let Some(total_timeout) = total_timeout {
+        builder = builder.timeout(total_timeout);
+    }
+    if let Some(read_timeout) = read_timeout {
+        builder = builder.read_timeout(read_timeout);
+    }
 
-    match mode.as_str() {
+    match mode {
         "system" => {
             // use system proxy (reqwest default)
         }
@@ -497,10 +669,17 @@ fn cached_stream_response(url: &str, range: Option<&str>, cache_state: &str, cac
     })
 }
 
-fn should_cache_stream_response(status: u16, content_type: &str, bytes: &[u8]) -> bool {
+/// `prefix` 只需要正文开头的 `CACHE_SNIFF_LEN` 字节，`total_len` 是整段长度——
+/// 边收边发时这两样在 EOF 时都拿得到，不必把整段留在内存里。
+fn should_cache_stream_response(
+    status: u16,
+    content_type: &str,
+    total_len: u64,
+    prefix: &[u8],
+) -> bool {
     // 206 也可能是整段内容（哔哩哔哩必须转发 Range），是否整段由
     // content_range_covers_whole 判定，这里只排除明显不可缓存的状态码。
-    if !matches!(status, 200 | 206) || bytes.len() < 1024 {
+    if !matches!(status, 200 | 206) || total_len < 1024 {
         return false;
     }
 
@@ -513,12 +692,38 @@ fn should_cache_stream_response(status: u16, content_type: &str, bytes: &[u8]) -
         return false;
     }
 
-    let prefix_len = bytes.len().min(128);
-    let prefix = String::from_utf8_lossy(&bytes[..prefix_len]).to_ascii_lowercase();
+    let prefix_len = prefix.len().min(CACHE_SNIFF_LEN);
+    let prefix = String::from_utf8_lossy(&prefix[..prefix_len]).to_ascii_lowercase();
     !prefix.contains("<html")
         && !prefix.contains("<!doctype")
         && !prefix.contains("\"code\"")
         && !prefix.contains("\"error\"")
+}
+
+/// 上游声明的正文长度：优先 `Content-Length`，其次从 `Content-Range` 的区间算。
+/// 两者都没有（chunked）时返回 None。
+fn body_len_from_headers(headers: &header::HeaderMap) -> Option<u64> {
+    if let Some(len) = headers
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.trim().parse::<u64>().ok())
+    {
+        return Some(len);
+    }
+
+    let value = headers
+        .get(header::CONTENT_RANGE)
+        .and_then(|v| v.to_str().ok())?
+        .trim();
+    let spec = value.strip_prefix("bytes").unwrap_or(value).trim();
+    let range_part = spec.split('/').next()?.trim();
+    let (start_raw, end_raw) = range_part.split_once('-')?;
+    let start = start_raw.trim().parse::<u64>().ok()?;
+    let end = end_raw.trim().parse::<u64>().ok()?;
+    if end < start {
+        return None;
+    }
+    Some(end - start + 1)
 }
 
 fn local_file_stream_response(
@@ -643,20 +848,50 @@ fn handle_stream_connection(mut stream: TcpStream) {
         return;
     }
 
-    let response = stream_response_for_request(target, headers.get("range").map(String::as_str))
+    let range_header = headers.get("range").map(String::as_str);
+    #[cfg(debug_assertions)]
+    let started = std::time::Instant::now();
+
+    let response = stream_response_for_request(target, range_header)
         .unwrap_or_else(|_| StreamResponse::empty(500));
 
-    if method == "HEAD" {
+    #[cfg(debug_assertions)]
+    let status = response.status;
+    #[cfg(debug_assertions)]
+    let cache_state = response
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("x-listen1-cache"))
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default();
+
+    let written = if method == "HEAD" {
         write_stream_response(
             &mut stream,
             StreamResponse {
                 body: StreamBody::Bytes(Vec::new()),
                 ..response
             },
-        );
+        )
     } else {
-        write_stream_response(&mut stream, response);
+        write_stream_response(&mut stream, response)
+    };
+
+    // 断断续续时最想知道的三件事：这次请求要的是哪一段、发出去多少字节、耗时多久。
+    #[cfg(debug_assertions)]
+    {
+        let _ = written;
+        let elapsed = started.elapsed();
+        if elapsed > Duration::from_millis(800) {
+            eprintln!(
+                "[stream][slow] {method} status={status} cache={cache_state} range={} bytes={written} in {}ms",
+                range_header.unwrap_or("-"),
+                elapsed.as_millis()
+            );
+        }
     }
+    #[cfg(not(debug_assertions))]
+    let _ = written;
 }
 
 fn stream_response_for_request(
@@ -696,7 +931,7 @@ fn remote_stream_response(url: &str, range: Option<&str>, no_cache_write: bool, 
     let rt = shared_runtime();
 
     rt.block_on(async move {
-        let client = build_client()?;
+        let client = build_stream_client()?;
         let mut headers_map = HashMap::new();
         inject_headers(url, &mut headers_map);
 
@@ -734,37 +969,89 @@ fn remote_stream_response(url: &str, range: Option<&str>, no_cache_write: bool, 
             .get("content-range")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.to_string());
-        let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
+        let len = body_len_from_headers(resp.headers());
 
-        if !no_cache_write
-            && content_range_covers_whole(content_range.as_deref())
-            && should_cache_stream_response(status, &content_type, &bytes)
-        {
-            cache::write(url, &content_type, &bytes, cache_id);
-            // 直接用已持有的字节构造响应，避免写盘后立刻重读整个文件。
-            return Ok(full_body_stream_response(status, &content_type, content_range.as_deref(), bytes, "miss"));
+        // 非 2xx 基本都是接口返回的小段错误正文，直接读完原样透传。
+        if !matches!(status, 200 | 206) {
+            let bytes = resp.bytes().await.map_err(|e| e.to_string())?.to_vec();
+            return Ok(full_body_stream_response(
+                status,
+                &content_type,
+                content_range.as_deref(),
+                bytes,
+                "miss",
+            ));
         }
 
-        Ok(full_body_stream_response(
+        // 只有整段响应才值得旁路落盘；`.part` 文件在 EOF 时才改名提交。
+        let cache = if !no_cache_write && content_range_covers_whole(content_range.as_deref()) {
+            CacheTee::new(url, &content_type, cache_id, status)
+        } else {
+            None
+        };
+
+        Ok(StreamResponse {
             status,
-            &content_type,
-            content_range.as_deref(),
-            bytes,
-            "miss",
-        ))
+            headers: stream_response_headers(&content_type, content_range.as_deref(), len, "miss"),
+            body: StreamBody::Remote(Box::new(RemoteBody { resp, len, cache })),
+        })
     })
 }
 
-fn full_body_stream_response(
-    status: u16,
+/// 在连接线程上把远端正文逐块搬到 socket。返回实际写出的字节数。
+///
+/// 不需要额外线程也不需要 channel：`handle_stream_connection` 本来就是每连接一个
+/// OS 线程，这里 `block_on` 的是别人的 runtime，不会自己等自己。
+fn write_remote_body(stream: &mut TcpStream, body: RemoteBody) -> u64 {
+    let RemoteBody {
+        mut resp,
+        len,
+        mut cache,
+    } = body;
+    let rt = shared_runtime();
+    let mut written: u64 = 0;
+    let mut clean_eof = false;
+
+    loop {
+        match rt.block_on(resp.chunk()) {
+            Ok(Some(chunk)) => {
+                if chunk.is_empty() {
+                    continue;
+                }
+                if stream.write_all(&chunk).is_err() {
+                    break;
+                }
+                written += chunk.len() as u64;
+                if let Some(tee) = cache.as_mut() {
+                    tee.push(&chunk);
+                }
+            }
+            Ok(None) => {
+                clean_eof = true;
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+
+    if let Some(tee) = cache.as_mut() {
+        // 长度未知（chunked）时只认 EOF；已知长度则必须一字节不差，
+        // 否则换歌打断留下的半首歌会被当成完整缓存。
+        let complete = clean_eof && len.is_none_or(|expected| expected == written);
+        tee.finish(written, complete);
+    }
+
+    written
+}
+
+fn stream_response_headers(
     content_type: &str,
     content_range: Option<&str>,
-    body: Vec<u8>,
+    len: Option<u64>,
     cache_state: &str,
-) -> StreamResponse {
+) -> Vec<(String, String)> {
     let mut headers = vec![
         ("Content-Type".into(), content_type.to_string()),
-        ("Content-Length".into(), body.len().to_string()),
         ("Cache-Control".into(), "public, max-age=86400".into()),
         ("Access-Control-Allow-Origin".into(), "*".into()),
         (
@@ -774,12 +1061,33 @@ fn full_body_stream_response(
         ("X-Listen1-Cache".into(), cache_state.into()),
     ];
 
+    if let Some(len) = len {
+        headers.push(("Content-Length".into(), len.to_string()));
+    }
+
     if let Some(content_range) = content_range {
         if !content_range.is_empty() {
             headers.push(("Content-Range".into(), content_range.to_string()));
             headers.push(("Accept-Ranges".into(), "bytes".into()));
         }
     }
+
+    headers
+}
+
+fn full_body_stream_response(
+    status: u16,
+    content_type: &str,
+    content_range: Option<&str>,
+    body: Vec<u8>,
+    cache_state: &str,
+) -> StreamResponse {
+    let headers = stream_response_headers(
+        content_type,
+        content_range,
+        Some(body.len() as u64),
+        cache_state,
+    );
 
     StreamResponse {
         status,
@@ -802,19 +1110,23 @@ fn status_text(status: u16) -> &'static str {
     }
 }
 
-fn write_stream_response(stream: &mut TcpStream, mut response: StreamResponse) {
+fn write_stream_response(stream: &mut TcpStream, mut response: StreamResponse) -> u64 {
     let has_length = response
         .headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("content-length"));
     if !has_length {
-        response
-            .headers
-            .push(("Content-Length".into(), response.body.len().to_string()));
+        if let Some(len) = response.body.known_len() {
+            response
+                .headers
+                .push(("Content-Length".into(), len.to_string()));
+        }
     }
     response
         .headers
         .push(("Access-Control-Allow-Headers".into(), "Range".into()));
+    // 保持 close：这个手写服务端没有实现 keep-alive 的分帧，长度未知的
+    // chunked 上游也要靠关闭连接来定界。
     response.headers.push(("Connection".into(), "close".into()));
 
     let mut head = format!(
@@ -829,20 +1141,26 @@ fn write_stream_response(stream: &mut TcpStream, mut response: StreamResponse) {
     head.push_str("\r\n");
 
     if stream.write_all(head.as_bytes()).is_err() {
-        return;
+        return 0;
     }
-    match response.body {
+    let written = match response.body {
         StreamBody::Bytes(bytes) => {
-            let _ = stream.write_all(&bytes);
+            if stream.write_all(&bytes).is_err() {
+                0
+            } else {
+                bytes.len() as u64
+            }
         }
         // 固定 64KB 缓冲区搬运，内存占用与文件大小无关。播放器中途放弃（换歌、seek）
         // 时写入会失败，这里直接停下——原先是整段已经读进内存了，白读的部分省不掉。
         StreamBody::File { file, len } => {
             let mut reader = std::io::BufReader::with_capacity(64 * 1024, file.take(len));
-            let _ = std::io::copy(&mut reader, stream);
+            std::io::copy(&mut reader, stream).unwrap_or(0)
         }
-    }
+        StreamBody::Remote(remote) => write_remote_body(stream, *remote),
+    };
     let _ = stream.flush();
+    written
 }
 
 #[tauri::command]
@@ -1027,9 +1345,15 @@ pub async fn handle_stream_protocol(
 
     let bytes = resp.bytes().await.unwrap_or_default().to_vec();
 
+    let sniff_len = bytes.len().min(CACHE_SNIFF_LEN);
     if !no_cache_write
         && content_range_covers_whole(Some(content_range.as_str()))
-        && should_cache_stream_response(status, &content_type, &bytes)
+        && should_cache_stream_response(
+            status,
+            &content_type,
+            bytes.len() as u64,
+            &bytes[..sniff_len],
+        )
     {
         cache::write(&real_url, &content_type, &bytes, cache_id.as_deref());
         // 直接用已持有的字节构造响应，避免写盘后立刻重读整个文件。
@@ -1048,9 +1372,10 @@ pub async fn handle_stream_protocol(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_range_covers_whole, ensure_stream_server, local_content_type,
-        should_cache_stream_response, should_fetch_full_for_cache,
+        body_len_from_headers, content_range_covers_whole, ensure_stream_server,
+        local_content_type, should_cache_stream_response, should_fetch_full_for_cache,
     };
+    use reqwest::header;
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::path::PathBuf;
@@ -1103,6 +1428,161 @@ mod tests {
             .iter()
             .find(|(key, _)| key == name)
             .map(|(_, value)| value.as_str())
+    }
+
+    /// 起一个只服务一次请求的假上游。返回 (监听地址, 上游收到的请求头)。
+    /// `respond` 拿到请求头文本，返回要原样写回去的完整字节（含状态行与响应头）。
+    fn fake_upstream(
+        respond: impl FnOnce(&str) -> Vec<u8> + Send + 'static,
+    ) -> (String, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind fake upstream");
+        let addr = listener.local_addr().expect("local addr").to_string();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut sock, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = Vec::new();
+            let mut chunk = [0_u8; 1024];
+            while let Ok(n) = sock.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let request = String::from_utf8_lossy(&buf).to_string();
+            let _ = tx.send(request.clone());
+            let _ = sock.write_all(&respond(&request));
+            let _ = sock.flush();
+            // 主动关闭：长度未知的响应就是靠这里定界的。
+            drop(sock);
+        });
+        (addr, rx)
+    }
+
+    fn pseudo_random(len: usize, salt: u32) -> Vec<u8> {
+        (0..len as u32)
+            .map(|i| (i.wrapping_mul(2654435761).wrapping_add(salt) >> 13) as u8)
+            .collect()
+    }
+
+    /// 远端正文改成边收边发之后，转出去的字节和 Content-Length 都不能有偏差。
+    ///
+    /// 300KB 会跨很多个 chunk，只测小响应的话「少写了最后一块」这种错会漏掉。
+    #[test]
+    fn streams_remote_body_exactly() {
+        let base = ensure_stream_server().expect("stream server starts");
+        let expected = pseudo_random(300_000, 7);
+        let payload = expected.clone();
+        let (addr, rx) = fake_upstream(move |_request| {
+            let mut out = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            )
+            .into_bytes();
+            out.extend_from_slice(&payload);
+            out
+        });
+
+        let upstream = format!("http://{addr}/sample.mp3");
+        let encoded = urlencoding::encode(&upstream).to_string();
+        let (status, headers, body) =
+            raw_get(base, &format!("{encoded}?no_cache_write=1"), None, "GET");
+
+        assert_eq!(status, 200);
+        let expected_len = expected.len().to_string();
+        assert_eq!(
+            header_value(&headers, "content-length"),
+            Some(expected_len.as_str())
+        );
+        assert_eq!(body.len(), expected.len());
+        assert_eq!(body, expected);
+
+        let request = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("upstream saw the request");
+        assert!(request.starts_with("GET /sample.mp3 "), "{request}");
+    }
+
+    /// 中途 seek：Range 必须原样转给上游，206 与 Content-Range 必须原样透传。
+    #[test]
+    fn forwards_range_and_passes_content_range_through() {
+        let base = ensure_stream_server().expect("stream server starts");
+        let expected = pseudo_random(1000, 31);
+        let payload = expected.clone();
+        let (addr, rx) = fake_upstream(move |_request| {
+            let mut out = format!(
+                "HTTP/1.1 206 Partial Content\r\nContent-Type: audio/mpeg\r\nContent-Length: {}\r\nContent-Range: bytes 1000-1999/300000\r\nConnection: close\r\n\r\n",
+                payload.len()
+            )
+            .into_bytes();
+            out.extend_from_slice(&payload);
+            out
+        });
+
+        let upstream = format!("http://{addr}/seek.mp3");
+        let encoded = urlencoding::encode(&upstream).to_string();
+        let (status, headers, body) = raw_get(
+            base,
+            &format!("{encoded}?no_cache_write=1"),
+            Some("bytes=1000-1999"),
+            "GET",
+        );
+
+        assert_eq!(status, 206);
+        assert_eq!(
+            header_value(&headers, "content-range"),
+            Some("bytes 1000-1999/300000")
+        );
+        assert_eq!(header_value(&headers, "accept-ranges"), Some("bytes"));
+        assert_eq!(body, expected);
+
+        let request = rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("upstream saw the request");
+        assert!(
+            request.to_ascii_lowercase().contains("range: bytes=1000-1999"),
+            "{request}"
+        );
+    }
+
+    /// 上游没给长度（靠关闭连接定界）时不能编一个 Content-Length：
+    /// 编错了播放器会按错的长度截断，正好就是「听着听着断一下」。
+    #[test]
+    fn omits_content_length_when_upstream_declares_none() {
+        let base = ensure_stream_server().expect("stream server starts");
+        let expected = pseudo_random(70_000, 101);
+        let payload = expected.clone();
+        let (addr, _rx) = fake_upstream(move |_request| {
+            let mut out =
+                b"HTTP/1.1 200 OK\r\nContent-Type: audio/mpeg\r\nConnection: close\r\n\r\n".to_vec();
+            out.extend_from_slice(&payload);
+            out
+        });
+
+        let upstream = format!("http://{addr}/unknown-length.mp3");
+        let encoded = urlencoding::encode(&upstream).to_string();
+        let (status, headers, body) =
+            raw_get(base, &format!("{encoded}?no_cache_write=1"), None, "GET");
+
+        assert_eq!(status, 200);
+        assert_eq!(header_value(&headers, "content-length"), None);
+        assert_eq!(body, expected);
+    }
+
+    /// 上游返回错误正文时不能落盘：判定只看开头这一小段，边收边发也要挡住。
+    #[test]
+    fn error_body_from_upstream_is_not_cacheable() {
+        let html = b"<!DOCTYPE html><html><head><title>403</title></head><body>no</body></html>";
+        assert!(!should_cache_stream_response(
+            200,
+            "application/octet-stream",
+            2 * 1024 * 1024,
+            html
+        ));
     }
 
     /// 本机文件按范围流式输出：正文一个字节都不能错，Content-Length 必须与实际长度一致。
@@ -1218,11 +1698,114 @@ mod tests {
     #[test]
     fn partial_content_status_is_cacheable() {
         let body = vec![7u8; 2048];
-        assert!(should_cache_stream_response(206, "audio/mp4", &body));
-        assert!(should_cache_stream_response(200, "audio/mpeg", &body));
-        assert!(!should_cache_stream_response(302, "audio/mpeg", &body));
-        assert!(!should_cache_stream_response(200, "audio/mpeg", &body[..512]));
-        assert!(!should_cache_stream_response(200, "application/json", &body));
+        assert!(should_cache_stream_response(
+            206,
+            "audio/mp4",
+            body.len() as u64,
+            &body[..128]
+        ));
+        assert!(should_cache_stream_response(
+            200,
+            "audio/mpeg",
+            body.len() as u64,
+            &body[..128]
+        ));
+        assert!(!should_cache_stream_response(
+            302,
+            "audio/mpeg",
+            body.len() as u64,
+            &body[..128]
+        ));
+        assert!(!should_cache_stream_response(
+            200,
+            "audio/mpeg",
+            512,
+            &body[..128]
+        ));
+        assert!(!should_cache_stream_response(
+            200,
+            "application/json",
+            body.len() as u64,
+            &body[..128]
+        ));
+    }
+
+    /// 边收边发时只留正文开头这一小段用于嗅探，判定结果必须和原先「拿着整段」一致。
+    #[test]
+    fn cache_decision_only_needs_prefix() {
+        let html = b"<!DOCTYPE html><html><body>404</body></html>";
+        assert!(!should_cache_stream_response(
+            200,
+            "application/octet-stream",
+            4096,
+            html
+        ));
+
+        let json_err = br#"{"code":-403,"message":"denied"}"#;
+        assert!(!should_cache_stream_response(
+            200,
+            "application/octet-stream",
+            4096,
+            json_err
+        ));
+
+        // 前缀短于 128 字节也不能 panic。
+        assert!(should_cache_stream_response(
+            206,
+            "audio/mpeg",
+            4096,
+            b"ID3\x04"
+        ));
+        // 上游一个字节都没给出：不该落盘。
+        assert!(!should_cache_stream_response(200, "audio/mpeg", 0, b""));
+    }
+
+    #[test]
+    fn body_len_prefers_content_length_then_content_range() {
+        let mut headers = header::HeaderMap::new();
+        assert_eq!(body_len_from_headers(&headers), None);
+
+        headers.insert(
+            header::CONTENT_RANGE,
+            header::HeaderValue::from_static("bytes 100-199/5000"),
+        );
+        assert_eq!(body_len_from_headers(&headers), Some(100));
+
+        headers.insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("100"),
+        );
+        assert_eq!(body_len_from_headers(&headers), Some(100));
+
+        // Content-Length 不可解析时退回 Content-Range。
+        headers.insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from_static("not-a-number"),
+        );
+        assert_eq!(body_len_from_headers(&headers), Some(100));
+
+        // 两个都不可解析（chunked / `bytes */total`）时返回 None，
+        // 此时不能发 Content-Length，靠关闭连接定界。
+        let mut unknown = header::HeaderMap::new();
+        unknown.insert(
+            header::CONTENT_RANGE,
+            header::HeaderValue::from_static("bytes */5000"),
+        );
+        assert_eq!(body_len_from_headers(&unknown), None);
+
+        let mut inverted = header::HeaderMap::new();
+        inverted.insert(
+            header::CONTENT_RANGE,
+            header::HeaderValue::from_static("bytes 200-100/5000"),
+        );
+        assert_eq!(body_len_from_headers(&inverted), None);
+
+        let mut full = header::HeaderMap::new();
+        full.insert(
+            header::CONTENT_RANGE,
+            header::HeaderValue::from_static("bytes 0-4999/5000"),
+        );
+        assert_eq!(body_len_from_headers(&full), Some(5000));
     }
 
     #[test]

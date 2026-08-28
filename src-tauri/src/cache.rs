@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::io::{Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -170,7 +171,9 @@ fn read_index(dir: &Path) -> CacheIndex {
 
 fn write_index(dir: &Path, index: &CacheIndex) {
     if std::fs::create_dir_all(dir).is_ok() {
-        if let Ok(text) = serde_json::to_string_pretty(index) {
+        // 紧凑 JSON：这个文件只给程序读，pretty 会让条目多起来后每次写盘都多出
+        // 好几倍的字节，而这段写盘是压在全局互斥锁里的。
+        if let Ok(text) = serde_json::to_string(index) {
             let _ = std::fs::write(index_path(dir), text);
         }
     }
@@ -325,7 +328,8 @@ pub fn try_read(url: &str, range_header: Option<&str>, cache_id: Option<&str>) -
     let path = dir.join(&entry.file_name);
     if !path.exists() {
         mem.index.entries.remove(&key);
-        write_index(&dir, &mem.index);
+        // 不在读路径上写盘：标脏，交给下一次缓存写入一起落盘。
+        mem.hits_dirty = true;
         return None;
     }
 
@@ -359,24 +363,164 @@ pub fn write(url: &str, content_type: &str, bytes: &[u8], cache_id: Option<&str>
         return;
     }
 
-    let now = now_secs();
-    let mut mem_guard = load_memory_index(&dir);
-    let mem = match mem_guard.as_mut() {
-        Some(mem) => mem,
-        None => return,
+    let evicted = record_entry(
+        &dir,
+        key,
+        url,
+        file_name,
+        content_type,
+        bytes.len() as u64,
+        config.max_bytes,
+    );
+    for victim in evicted {
+        let _ = std::fs::remove_file(victim);
+    }
+}
+
+/// 为「边下边播」的旁路缓存准备一个独占的 `.part` 路径。
+/// 返回 None 表示缓存被关掉或目录不可用，此时上层直接不做旁路写入。
+///
+/// 序号让同一首歌的两条并发连接不会写进同一个临时文件——否则两边交错写，
+/// 先提交的那个会把一份损坏的音频永久留在缓存里。
+pub(crate) fn begin_temp_write(url: &str, cache_id: Option<&str>) -> Option<PathBuf> {
+    let config = active_config();
+    if !config.enabled {
+        return None;
+    }
+
+    let dir = active_cache_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    sweep_stale_temp_files(&dir);
+
+    static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let key = cache_key_for(cache_id, url);
+    Some(dir.join(format!(
+        "{}.{}.{}.part",
+        key,
+        extension_from_url(url),
+        seq
+    )))
+}
+
+/// 进程内只做一次：清掉上次崩溃/强杀留下的 `.part`。
+/// 只删 10 分钟前的，避免误删同时在下的另一条连接。
+fn sweep_stale_temp_files(dir: &Path) {
+    static SWEPT: OnceLock<()> = OnceLock::new();
+    if SWEPT.get().is_some() {
+        return;
+    }
+    let _ = SWEPT.set(());
+
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
-    let previous_hits = mem.index.entries.get(&key).map(|entry| entry.hits).unwrap_or(0);
-    let created_at = mem
-        .index
-        .entries
-        .get(&key)
-        .map(|entry| entry.created_at)
-        .unwrap_or(now);
+    let cutoff = std::time::Duration::from_secs(600);
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("part") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .and_then(|t| SystemTime::now().duration_since(t).map_err(std::io::Error::other))
+            .map(|age| age > cutoff)
+            .unwrap_or(false);
+        if stale {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// `.part` 改名为正式缓存文件并登记索引。返回是否提交成功；false 时临时文件
+/// 仍在原处，由调用方删除。
+pub(crate) fn commit_temp_write(
+    temp_path: &Path,
+    url: &str,
+    content_type: &str,
+    size: u64,
+    cache_id: Option<&str>,
+) -> bool {
+    let config = active_config();
+    if !config.enabled || size == 0 {
+        return false;
+    }
+
+    let dir = active_cache_dir();
+    let key = cache_key_for(cache_id, url);
+    let file_name = format!("{}.{}", key, extension_from_url(url));
+    let path = dir.join(&file_name);
+    // Windows 上 rename 不会覆盖已存在的目标文件。
+    if path.exists() {
+        let _ = std::fs::remove_file(&path);
+    }
+    if std::fs::rename(temp_path, &path).is_err() {
+        return false;
+    }
+
+    #[cfg(debug_assertions)]
+    let started = std::time::Instant::now();
+
+    let evicted = record_entry(
+        &dir,
+        key,
+        url,
+        file_name,
+        content_type,
+        size,
+        config.max_bytes,
+    );
+    let evicted_count = evicted.len();
+    for victim in evicted {
+        let _ = std::fs::remove_file(victim);
+    }
+
+    #[cfg(debug_assertions)]
+    {
+        let _ = evicted_count;
+        let elapsed = started.elapsed();
+        if elapsed > std::time::Duration::from_millis(120) {
+            eprintln!(
+                "[cache][slow] index update took {}ms (size={size}, evicted={evicted_count})",
+                elapsed.as_millis()
+            );
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    let _ = evicted_count;
+
+    true
+}
+
+/// 把一个已经落盘的缓存文件登记进索引，返回需要在**锁外**删除的淘汰文件。
+///
+/// 序列化在锁内（纯 CPU），写盘放到锁外：播放期间每个 Range 请求都要抢
+/// `memory_index()` 这把锁，把 index.json 的写盘和淘汰删除压在锁里，
+/// 等于让音频缓冲跟磁盘 IO 排队。
+fn record_entry(
+    dir: &Path,
+    key: String,
+    url: &str,
+    file_name: String,
+    content_type: &str,
+    size: u64,
+    max_bytes: u64,
+) -> Vec<PathBuf> {
+    let now = now_secs();
+    let mut mem_guard = load_memory_index(dir);
+    let Some(mem) = mem_guard.as_mut() else {
+        return Vec::new();
+    };
+
+    let previous = mem.index.entries.get(&key);
+    let previous_hits = previous.map(|entry| entry.hits).unwrap_or(0);
+    let created_at = previous.map(|entry| entry.created_at).unwrap_or(now);
     let mut entry = CacheEntry {
         url: url.to_string(),
         file_name,
         content_type: content_type.to_string(),
-        size: bytes.len() as u64,
+        size,
         hits: previous_hits.saturating_add(1),
         created_at,
         last_access_at: now,
@@ -386,21 +530,34 @@ pub fn write(url: &str, content_type: &str, bytes: &[u8], cache_id: Option<&str>
     entry.score = score_entry(&entry, now);
     entry.category = category_entry(&entry, now);
     mem.index.entries.insert(key, entry);
-    cleanup_index(&dir, &mut mem.index, config.max_bytes);
-    write_index(&dir, &mem.index);
+
+    let evicted = cleanup_index(dir, &mut mem.index, max_bytes);
+    let text = serde_json::to_string(&mem.index).ok();
     mem.hits_dirty = false;
+    drop(mem_guard);
+
+    if let Some(text) = text {
+        if std::fs::create_dir_all(dir).is_ok() {
+            let _ = std::fs::write(index_path(dir), text);
+        }
+    }
+
+    evicted
 }
 
-fn cleanup_index(dir: &Path, index: &mut CacheIndex, max_bytes: u64) {
-    let now = now_secs();
+/// 返回被淘汰条目的文件路径，由调用方在放开锁之后删除。
+///
+/// 没超限就**什么都不做**：原先每次缓存写入都要 stat 所有条目 + 重算所有分数 +
+/// 全量排序，几百条目就是几百次系统调用，全压在跟 `try_read` 共享的那把锁里。
+fn cleanup_index(dir: &Path, index: &mut CacheIndex, max_bytes: u64) -> Vec<PathBuf> {
+    if total_size(index) <= max_bytes {
+        return Vec::new();
+    }
 
-    index.entries.retain(|_, entry| {
-        let path = dir.join(&entry.file_name);
-        if !path.exists() {
-            return false;
-        }
-        true
-    });
+    let now = now_secs();
+    index
+        .entries
+        .retain(|_, entry| dir.join(&entry.file_name).exists());
 
     let mut entries: Vec<(String, f64)> = index
         .entries
@@ -414,15 +571,18 @@ fn cleanup_index(dir: &Path, index: &mut CacheIndex, max_bytes: u64) {
 
     entries.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
 
-    while total_size(index) > max_bytes {
-        let Some((key, _)) = entries.first().cloned() else {
+    let mut removed = Vec::new();
+    let mut total = total_size(index);
+    for (key, _) in entries {
+        if total <= max_bytes {
             break;
-        };
-        entries.remove(0);
+        }
         if let Some(entry) = index.entries.remove(&key) {
-            let _ = std::fs::remove_file(dir.join(entry.file_name));
+            total = total.saturating_sub(entry.size);
+            removed.push(dir.join(entry.file_name));
         }
     }
+    removed
 }
 
 #[tauri::command]
@@ -498,7 +658,9 @@ pub fn get_cache_stats() -> CacheStats {
         };
     }
     let index = &mut mem_guard.as_mut().unwrap().index;
-    cleanup_index(&dir, index, config.max_bytes);
+    // cleanup_index 现在只在真的超限时才重算分数，统计面板要自己刷新一次。
+    refresh_scores(index);
+    let evicted = cleanup_index(&dir, index, config.max_bytes);
 
     let stats = CacheStats {
         enabled: config.enabled,
@@ -526,7 +688,19 @@ pub fn get_cache_stats() -> CacheStats {
     if let Some(mem) = mem_guard.as_ref() {
         write_index(&dir, &mem.index);
     }
+    drop(mem_guard);
+    for victim in evicted {
+        let _ = std::fs::remove_file(victim);
+    }
     stats
+}
+
+fn refresh_scores(index: &mut CacheIndex) {
+    let now = now_secs();
+    for entry in index.entries.values_mut() {
+        entry.score = score_entry(entry, now);
+        entry.category = category_entry(entry, now);
+    }
 }
 
 #[tauri::command]
