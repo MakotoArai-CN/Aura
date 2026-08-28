@@ -17,15 +17,22 @@
     );
   });
 
-  /** 分组用的日期标签：今天 / 昨天 / N 天前 / M 月 D 日。 */
+  /** 当天零点。分组按它切，也拿它当 {#each} 的 key——显示文案不能当 key，见下。 */
+  function dayStart(ts: number): number {
+    const d = new Date(ts);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  }
+
+  /** 分组用的日期标签：今天 / 昨天 / N 天前 / M 月 D 日（不是今年的补上年份）。 */
   function dayLabel(ts: number): string {
-    const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const now = new Date();
     const then = new Date(ts);
-    const days = Math.round((midnight(new Date()) - midnight(then)) / 86400000);
+    const days = Math.round((dayStart(Date.now()) - dayStart(ts)) / 86400000);
     if (days <= 0) return "今天";
     if (days === 1) return "昨天";
     if (days < 7) return `${days} 天前`;
-    return `${then.getMonth() + 1} 月 ${then.getDate()} 日`;
+    const md = `${then.getMonth() + 1} 月 ${then.getDate()} 日`;
+    return then.getFullYear() === now.getFullYear() ? md : `${then.getFullYear()} 年 ${md}`;
   }
 
   /**
@@ -34,14 +41,18 @@
    * 刻意不做成「每行右边贴一个时间」——SongRow 的根节点就是 <li>，想在它旁边放东西
    * 就得再套一层 <li>，而 <li> 里不能直接放 <li>，解析器会把外层提前闭合，布局直接散架。
    * 分隔行本身是 <li>，跟 SongRow 平级，合法且更好读。
+   *
+   * 切分和 key 都用零点时间戳，不用显示文案：文案里「3 月 5 日」不带年份，隔一年的同一天
+   * 会撞成同一个 key，Svelte 直接抛 each_key_duplicate，整个视图连「清空」按钮一起白屏，
+   * 而那按钮正是唯一能清掉这条记录的出口，等于永久卡死。
    */
   let groups = $derived.by(() => {
-    const out: Array<{ label: string; entries: typeof filtered }> = [];
+    const out: Array<{ day: number; label: string; entries: typeof filtered }> = [];
     for (const entry of filtered) {
-      const label = dayLabel(entry.playedAt);
+      const day = dayStart(entry.playedAt);
       const tail = out[out.length - 1];
-      if (tail?.label === label) tail.entries.push(entry);
-      else out.push({ label, entries: [entry] });
+      if (tail?.day === day) tail.entries.push(entry);
+      else out.push({ day, label: dayLabel(entry.playedAt), entries: [entry] });
     }
     return out;
   });
@@ -111,7 +122,7 @@
     <div class="empty-state">没有匹配「{query}」的记录</div>
   {:else}
     <ul class="detail-songlist recent-songlist">
-      {#each groups as group (group.label)}
+      {#each groups as group (group.day)}
         <li class="day-sep">{group.label}</li>
         {#each group.entries as entry (entry.track.id)}
           <SongRow
