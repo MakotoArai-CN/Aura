@@ -487,6 +487,52 @@ jobs:
           done
           ls -la android-apks/
 
+      # v1.0.2 装得上但一开就退：libaura_lib.so 的 PT_LOAD 段是 4 KB 对齐，而清单里
+      # extractNativeLibs=false，.so 由 linker 直接从 APK mmap。16 KB 页的 Android 15/16
+      # 设备映射不了 4 KB 粒度的段，dlopen 失败，进程死在加载原生库那一步。
+      # src-tauri/.cargo/config.toml 已经加了链接参数，这一步是防回归的硬闸：对齐不达标
+      # 就让流水线红掉，别再让同样装不了的包发出去。
+      - name: Verify 16 KB page alignment
+        run: |
+          python3 - <<'PY'
+          import glob, struct, sys, zipfile
+
+          bad = []
+          for apk in sorted(glob.glob("android-apks/*.apk")):
+              with zipfile.ZipFile(apk) as z:
+                  libs = [n for n in z.namelist()
+                          if n.startswith(("lib/arm64-v8a/", "lib/x86_64/")) and n.endswith(".so")]
+                  if not libs:
+                      print(f"{apk}: 无 64 位原生库，跳过")
+                      continue
+                  for name in libs:
+                      blob = z.read(name)
+                      if blob[:4] != b"\x7fELF":
+                          bad.append((apk, name, "不是 ELF"))
+                          continue
+                      phoff = struct.unpack_from("<Q", blob, 0x20)[0]
+                      phentsize = struct.unpack_from("<H", blob, 0x36)[0]
+                      phnum = struct.unpack_from("<H", blob, 0x38)[0]
+                      aligns = []
+                      for i in range(phnum):
+                          o = phoff + i * phentsize
+                          if struct.unpack_from("<I", blob, o)[0] == 1:  # PT_LOAD
+                              aligns.append(struct.unpack_from("<Q", blob, o + 48)[0])
+                      worst = min(aligns) if aligns else 0
+                      ok = worst >= 16384
+                      print(f"{apk}: {name} 最小 p_align={worst} ({worst // 1024} KB) "
+                            f"{'OK' if ok else '不达标'}")
+                      if not ok:
+                          bad.append((apk, name, f"p_align={worst}"))
+
+          if bad:
+              for apk, name, why in bad:
+                  print(f"::error::{apk} 的 {name} 未按 16 KB 页对齐（{why}），"
+                        f"在 16 KB 页设备上会 dlopen 失败、装上打不开")
+              sys.exit(1)
+          print("全部 64 位原生库均已按 16 KB 页对齐")
+          PY
+
       # 别再让未签名的 APK 混进 Release：装不上的包发出去等于没发。
       - name: Verify APK signatures
         run: |
