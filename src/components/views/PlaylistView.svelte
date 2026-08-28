@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { MediaService } from "../../lib/providers/index";
   import { localmusic } from "../../lib/providers/localmusic";
   import { player } from "../../lib/player";
+  import { playerState } from "../../lib/stores/player";
   import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import SongRow from "../ui/SongRow.svelte";
   import { runOnActionKey } from "../../lib/keyboard";
@@ -46,6 +47,33 @@
   // 歌单一次性全量返回（provider 无服务端分页），此处做客户端渐进渲染：先渲染前 N 首，触底再加 N。
   let visibleTracks = $derived(filteredTracks.slice(0, renderLimit));
   let hasMoreToRender = $derived(renderLimit < filteredTracks.length);
+
+  let songlistEl = $state<HTMLUListElement | null>(null);
+  /** 正在播放那首在本歌单里的下标，-1 表示不在本歌单（此时不显示定位按钮）。 */
+  let currentTrackIndex = $derived.by(() => {
+    const id = $playerState.currentTrack?.id;
+    if (!id) return -1;
+    return playlist?.tracks.findIndex((t) => t.id === id) ?? -1;
+  });
+
+  /**
+   * 滚到正在播放的那一行。刻意做成按钮而不是进歌单自动滚——自动滚会打断
+   * 「进来先看歌单头部」这个更常见的意图。
+   *
+   * 有两道门得先开：搜索框可能把这首过滤掉了，渐进渲染可能还没渲染到它，
+   * 两种情况下那个 <li> 根本不在 DOM 里，scrollIntoView 无从下手。
+   */
+  async function locateCurrentTrack() {
+    const target = currentTrackIndex;
+    if (target < 0) return;
+    if (!filteredTracks.some(({ idx }) => idx === target)) playlistQuery = "";
+    const pos = filteredTracks.findIndex(({ idx }) => idx === target);
+    if (pos < 0) return;
+    if (pos >= renderLimit) renderLimit = pos + 1;
+    await tick();
+    // SongRow 已经给当前那行挂了 .playing，不用另外埋标记
+    songlistEl?.querySelector("li.playing")?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }
 
   async function loadPlaylist(useCache = true) {
     loading = true;
@@ -195,6 +223,18 @@
               </div>
             {/if}
 
+            {#if currentTrackIndex >= 0}
+              <div class="playlist-button locate-button" onclick={locateCurrentTrack} role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, locateCurrentTrack)} title="滚动到正在播放的这首">
+                <div class="play-list">
+                  <svg width="15" height="15" viewBox="0 0 24 24" style="flex:0 0 15px;margin-right:8px">
+                    <circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/>
+                    <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>
+                  </svg>
+                  定位当前
+                </div>
+              </div>
+            {/if}
+
             {#if isLocal}
               <div class="playlist-button local-action-button" onclick={addLocalTracks} role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, addLocalTracks)}>
                 <div class="play-list">
@@ -269,7 +309,7 @@
       </div>
 
       <!-- Track list -->
-      <ul class="detail-songlist playlist-songlist">
+      <ul class="detail-songlist playlist-songlist" bind:this={songlistEl}>
         {#if playlist.tracks.length > 0}
           <div class="playlist-search">
             <svg fill="currentColor" style="opacity:0.28;margin-right:4px;width:15px;height:15px;cursor:default" viewBox="0 0 24 24">
@@ -521,6 +561,7 @@
 
   .playlist-button.clone-button,
   .playlist-button.edit-button,
+  .playlist-button.locate-button,
   .playlist-button.fav-button {
     flex: 0 0 auto;
   }
