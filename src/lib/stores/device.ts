@@ -68,18 +68,7 @@ export function applyRuntimeDowngrade(): VisualTier {
   const current = get(deviceTier);
   if (get(settings).effectTier !== "auto" || current === "low") return current;
   runtimeDowngrade.update((n) => n + 1);
-  const next = get(deviceTier);
-  // 把降档结果记给下一次启动：GPU 启动参数必须在首个 WebView 之前决定，本次运行
-  // 已经来不及关 GPU 了。不记的话每次启动都按检测值重新开 GPU，用户就会一直看到
-  // 「界面已经降到低档、GPU 却还在跑」。失败无所谓，下次看门狗还会再触发。
-  void (async () => {
-    try {
-      const { setRuntimeTier, isTauriRuntime } = await import("../tauri");
-      if (!isTauriRuntime()) return;
-      await setRuntimeTier(next as "ultra" | DeviceTier);
-    } catch {}
-  })();
-  return next;
+  return get(deviceTier);
 }
 
 export async function initDeviceTier(): Promise<DeviceTier> {

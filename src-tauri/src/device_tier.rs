@@ -66,144 +66,19 @@ pub fn set_effect_tier_override(tier: String) -> Result<(), String> {
     std::fs::write(&path, value).map_err(|err| err.to_string())
 }
 
-/// 看门狗降档结果的落盘位置。格式一行 `<当时检测到的档位>:<降档后的档位>`。
-///
-/// 为什么要存"当时检测到的档位"：这个文件的意义是"上次实际跑起来发现撑不住"，
-/// 而不是"这台机器永远是低档"。换了显卡、插上电源、关掉别的吃 CPU 的程序之后
-/// 检测结果会变，那时旧记录就不该再压着 GPU 不放。检测值一变就作废重新评估。
-fn runtime_tier_path() -> std::path::PathBuf {
-    crate::cache::user_home_dir()
-        .join("Listen1")
-        .join("effect_tier_runtime")
-}
-
-/// 读上一次运行的看门狗降档结果。仅在"当时的检测值"与本次一致时才认。
-fn runtime_downgraded_tier() -> Option<String> {
-    let raw = std::fs::read_to_string(runtime_tier_path()).ok()?;
-    parse_runtime_record(&raw, *detected_tier())
-}
-
-/// 档位排序，数字越小效果越好。只用来判断"记录里的档位是不是比检测值更高"。
-fn tier_rank(tier: &str) -> u8 {
-    match tier {
-        "ultra" => 0,
-        "high" => 1,
-        "mid" => 2,
-        _ => 3,
-    }
-}
-
-/// 解析降档记录。抽成纯函数是为了能直接测——detected_tier() 是 OnceLock，一个进程
-/// 里只能取一个值，不抽出来就没法在单元测试里覆盖多个检测档位。
-fn parse_runtime_record(raw: &str, detected: DeviceTier) -> Option<String> {
-    let (recorded_detected, effective) = raw.trim().split_once(':')?;
-    if recorded_detected.trim().to_ascii_lowercase() != detected.as_str() {
-        return None;
-    }
-    let value = effective.trim().to_ascii_lowercase();
-    match value.as_str() {
-        "ultra" | "high" | "mid" | "low" => {}
-        _ => return None,
-    }
-    // 记录只可能是"实测撑不住所以降下来"，绝不可能比检测值更高。真读到更高的值说明
-    // 文件被手改或写坏了，直接作废——否则会出现 GPU 关着、档位却是 high 的组合，
-    // 软件渲染 blur(72px) 是所有搭配里最慢的一种。
-    if tier_rank(&value) < tier_rank(detected.as_str()) {
-        return None;
-    }
-    Some(value)
-}
-
-/// 前端看门狗降档后调用，记给下一次启动看。传 "auto" 表示清除记录
-/// （用户把滑条从自动切走时调用，手动锁档时这条记录不该再插手）。
-#[tauri::command]
-pub fn set_runtime_tier(tier: String) -> Result<(), String> {
-    let path = runtime_tier_path();
-    let value = tier.trim().to_ascii_lowercase();
-    if value == "auto" {
-        // 不存在也算成功：清除一个本来就没有的记录不是错误。
-        return match std::fs::remove_file(&path) {
-            Ok(()) => Ok(()),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(err) => Err(err.to_string()),
-        };
-    }
-    match value.as_str() {
-        "ultra" | "high" | "mid" | "low" => {}
-        _ => return Err(format!("unknown runtime tier: {tier}")),
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
-    }
-    std::fs::write(&path, format!("{}:{}", detected_tier().as_str(), value))
-        .map_err(|err| err.to_string())
-}
-
-/// 纯决策：三个输入（手动锁档 / 检测值 / 上次运行记录）→ 要不要开 GPU。
-fn decide_gpu(manual: Option<&str>, detected: DeviceTier, record: Option<&str>) -> bool {
-    // 手动锁档优先，且这里读到的是上一次运行写下的值——用户改档后 GPU 参数要下次
-    // 启动才生效，正是和用户确认过的行为（CSS 立即生效，CPU/GPU 部分下次启动）。
-    if let Some(manual) = manual {
-        return manual == "ultra" || manual == "high";
-    }
-    if detected != DeviceTier::High {
-        return false;
-    }
-    // 检测说 High，但上次运行的看门狗把档位压下去了：说明这台机器实测撑不住，
-    // 那就别再开 GPU。原先这条链是断的——看门狗只改 CSS 变量，Rust 侧的 GPU
-    // 决策永远只看检测值，于是出现"界面已经是低档、GPU 却一直开着"。
-    match record {
-        Some(effective) => effective == "ultra" || effective == "high",
-        None => true,
-    }
-}
-
-/// 纯决策：三个输入 → 本次该按哪一档渲染。
-///
-/// 取值域必须落在三档检测值内（前端 detectedTier 不接受 ultra——那一档只能由用户
-/// 手动选，走 settings 那条路），所以手动锁 ultra 时这里回 high。
-fn decide_tier(manual: Option<&str>, detected: DeviceTier, record: Option<&str>) -> &'static str {
-    // 手动锁档必须排在最前面，和 decide_gpu() 的优先级保持一致：用户明确选了档位时，
-    // 看门狗的历史记录不该再插手，否则两个函数会给出互相矛盾的答案。
-    if let Some(manual) = manual {
-        return match manual {
-            "ultra" | "high" => DeviceTier::High.as_str(),
-            "mid" => DeviceTier::Mid.as_str(),
-            _ => DeviceTier::Low.as_str(),
-        };
-    }
-    match record {
-        // 记录只可能是"降下来"的结果，比检测值更高一律忽略：parse_runtime_record 已经
-        // 在读文件时挡掉了，这里再挡一次是为了让"GPU 关着却渲染 high 档"这个最差搭配
-        // 不依赖调用方的输入是否干净——它是决策层自己的不变量。
-        Some(value) if tier_rank(value) < tier_rank(detected.as_str()) => detected.as_str(),
-        // ultra 只可能来自手动锁档，看门狗不会写；写进来也当 high 处理。
-        Some("ultra") | Some("high") => DeviceTier::High.as_str(),
-        Some("mid") => DeviceTier::Mid.as_str(),
-        Some("low") => DeviceTier::Low.as_str(),
-        _ => detected.as_str(),
-    }
-}
-
 /// 供 WebView2 启动参数决策：仅 High 档（或手动锁到 high/ultra）启用 GPU。
 pub fn should_enable_gpu_acceleration() -> bool {
-    decide_gpu(
-        manual_override().as_deref(),
-        *detected_tier(),
-        runtime_downgraded_tier().as_deref(),
-    )
+    // 手动锁档优先，且这里读到的是上一次运行写下的值——用户改档后 GPU 参数要下次
+    // 启动才生效，正是和用户确认过的行为（CSS 立即生效，CPU/GPU 部分下次启动）。
+    if let Some(manual) = manual_override() {
+        return manual == "ultra" || manual == "high";
+    }
+    *detected_tier() == DeviceTier::High
 }
 
-/// 返回的是"本次该按哪一档渲染"，不是纯检测值：上次运行看门狗压下去的结果要一起
-/// 算进来。否则会出现 CSS 按 high 画、GPU 却因为同一条记录被关掉的组合。
 #[tauri::command]
 pub fn get_device_tier() -> String {
-    decide_tier(
-        manual_override().as_deref(),
-        *detected_tier(),
-        runtime_downgraded_tier().as_deref(),
-    )
-    .to_string()
+    detected_tier().as_str().to_string()
 }
 
 pub(crate) fn detect() -> DeviceTier {
@@ -368,93 +243,7 @@ fn has_discrete_gpu() -> bool {
 
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
-    use super::{decide_gpu, decide_tier, is_low_voltage_cpu, parse_runtime_record, DeviceTier};
-
-    /// 用户要求「中低机型直接不启用GPU」的七种状态组合。
-    /// 元组含义：(手动锁档, 检测值, 降档记录) → (该不该开 GPU, 该按哪一档渲染)
-    #[test]
-    fn gpu_and_tier_agree_across_states() {
-        let cases: &[(Option<&str>, DeviceTier, Option<&str>, bool, &str)] = &[
-            // (a)(b) 检测就是中低档 → 不开 GPU
-            (None, DeviceTier::Low, None, false, "low"),
-            (None, DeviceTier::Mid, None, false, "mid"),
-            // (c) 检测 high 且没有降档记录 → 开
-            (None, DeviceTier::High, None, true, "high"),
-            // (d) 检测 high 但上次实测撑不住 → 不开（本次修的就是这条）
-            (None, DeviceTier::High, Some("low"), false, "low"),
-            (None, DeviceTier::High, Some("mid"), false, "mid"),
-            // 记录说仍是 high（看门狗还没降过）→ 照常开
-            (None, DeviceTier::High, Some("high"), true, "high"),
-            // (f) 手动锁低档 → 不开，且记录不再插手
-            (Some("low"), DeviceTier::High, Some("high"), false, "low"),
-            (Some("mid"), DeviceTier::High, Some("low"), false, "mid"),
-            // 手动锁 high/ultra → 开；ultra 要收敛成 high 以符合前端类型契约
-            (Some("high"), DeviceTier::Low, Some("low"), true, "high"),
-            (Some("ultra"), DeviceTier::Low, None, true, "high"),
-        ];
-        for &(manual, detected, record, want_gpu, want_tier) in cases {
-            assert_eq!(
-                decide_gpu(manual, detected, record),
-                want_gpu,
-                "gpu for {manual:?}/{detected:?}/{record:?}"
-            );
-            assert_eq!(
-                decide_tier(manual, detected, record),
-                want_tier,
-                "tier for {manual:?}/{detected:?}/{record:?}"
-            );
-        }
-    }
-
-    /// 最差搭配是「GPU 关着但档位是 high」——软件渲染 blur(72px)。穷举所有输入组合，
-    /// 确认它一次都出不来。
-    #[test]
-    fn never_pairs_software_rendering_with_high_tier() {
-        let manuals = [None, Some("ultra"), Some("high"), Some("mid"), Some("low")];
-        let records = [None, Some("ultra"), Some("high"), Some("mid"), Some("low")];
-        for manual in manuals {
-            for detected in [DeviceTier::High, DeviceTier::Mid, DeviceTier::Low] {
-                for record in records {
-                    let gpu = decide_gpu(manual, detected, record);
-                    let tier = decide_tier(manual, detected, record);
-                    assert!(
-                        gpu || tier != "high",
-                        "GPU 关闭却渲染 high 档：{manual:?}/{detected:?}/{record:?}"
-                    );
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn runtime_record_requires_matching_detected_tier() {
-        // 检测值一致才认
-        assert_eq!(
-            parse_runtime_record("high:low", DeviceTier::High).as_deref(),
-            Some("low")
-        );
-        // 写记录时的检测值和现在不一样 → 作废（换了显卡/插上电源之后要重新评估）
-        assert_eq!(parse_runtime_record("mid:low", DeviceTier::High), None);
-        // 空白与大小写
-        assert_eq!(
-            parse_runtime_record("  HIGH : LOW \n", DeviceTier::High).as_deref(),
-            Some("low")
-        );
-        // 记录比检测值更高 → 只可能是手改或写坏，作废
-        assert_eq!(parse_runtime_record("mid:high", DeviceTier::Mid), None);
-        assert_eq!(parse_runtime_record("low:ultra", DeviceTier::Low), None);
-        // 同档位合法
-        assert_eq!(
-            parse_runtime_record("mid:mid", DeviceTier::Mid).as_deref(),
-            Some("mid")
-        );
-        // 畸形内容
-        assert_eq!(parse_runtime_record("", DeviceTier::High), None);
-        assert_eq!(parse_runtime_record("high", DeviceTier::High), None);
-        assert_eq!(parse_runtime_record("high:", DeviceTier::High), None);
-        assert_eq!(parse_runtime_record("high:banana", DeviceTier::High), None);
-        assert_eq!(parse_runtime_record(":low", DeviceTier::High), None);
-    }
+    use super::is_low_voltage_cpu;
 
     #[test]
     fn detects_u_suffix_models() {
