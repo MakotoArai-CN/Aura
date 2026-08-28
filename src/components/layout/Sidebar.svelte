@@ -156,6 +156,19 @@
           </div>
         </button>
       </li>
+      <li class:active={activeView.type === "recent"}>
+        <button type="button" class="sidebar-nav-btn"
+          onclick={() => navigate({ type: "recent" })}>
+          <div class="sidebar-block" class:opensidebar={open}>
+            <div>
+              <svg width="18" height="18" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="9"/><path d="M12 7.5V12l3.5 2"/>
+              </svg>
+            </div>
+            <span class="nav-label">最近播放</span>
+          </div>
+        </button>
+      </li>
     </ul>
 
     <!-- My playlists -->

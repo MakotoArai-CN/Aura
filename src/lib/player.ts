@@ -7,6 +7,7 @@ import { isTauriRuntime, audioCacheLookup } from "./tauri";
 import { proxyResourceUrl } from "./resourceUrl";
 import { settings } from "./stores/settings";
 import { toast } from "./stores/toast";
+import { recentPlayed } from "./stores/recent";
 
 const BROKEN_STREAM_PREFIX = "http://stream.localhost/";
 const LEGACY_STREAM_PREFIX = "stream://localhost/";
@@ -812,6 +813,9 @@ class Listen1Player {
     this.playedFrom = Date.now();
     playbackClock.update(0, 0);
     playerState.patch({ loading: true, position: 0, currentTrack: track, currentIndex: this.index });
+    // 记在这里而不是等播放成功：这是唯一一个「换到新的一首」的入口（换源重试走的是
+    // 另一条路，不会重复记），而且失败自动跳过的那首也确实是用户听过的一次尝试。
+    recentPlayed.record(track);
     void this._resolveAndPlay(track, ++this.loadSeq);
     this.saveToStorage();
   }

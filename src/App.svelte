@@ -10,6 +10,7 @@
   import PlaylistView from "./components/views/PlaylistView.svelte";
   import SettingsView from "./components/views/SettingsView.svelte";
   import ProfileView from "./components/views/ProfileView.svelte";
+  import RecentView from "./components/views/RecentView.svelte";
   import LyricSync from "./components/LyricSync.svelte";
   import Toast from "./components/ui/Toast.svelte";
   import { player } from "./lib/player";
@@ -40,6 +41,7 @@
     | { type: "playlist"; id: string }
     | { type: "nowplaying" }
     | { type: "profile"; source?: string }
+    | { type: "recent" }
     | { type: "settings" };
 
   let currentView: View = $state({ type: "discover", source: "netease" });
@@ -258,6 +260,8 @@
                 <PlaylistView {navigate} listId={(contentView as { id: string }).id} />
               {:else if contentView.type === "profile"}
                 <ProfileView {navigate} source={(contentView as { source?: string }).source ?? "netease"} />
+              {:else if contentView.type === "recent"}
+                <RecentView {navigate} />
               {:else if contentView.type === "settings"}
                 <SettingsView />
               {/if}
