@@ -81,8 +81,7 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                let main_window = app.get_webview_window("main").unwrap();
-                setup_tray(app, main_window)?;
+                setup_tray(app)?;
             }
             #[cfg(debug_assertions)]
             eprintln!("[listen1] setup complete");
@@ -190,8 +189,9 @@ pub fn run() {
     app.run(|_app, event| {
         // 轻量模式下 main 窗口是真被销毁的，不是隐藏。Tauri 默认"没有窗口就退出进程"，
         // 而这时候原生迷你播放器还在另一个线程里放着歌，所以必须拦住。
+        // 但托盘「退出」也会走到这儿，那种情况已经立了 shutdown 旗子，不能再拦。
         if let tauri::RunEvent::ExitRequested { api, .. } = &event {
-            if mini::is_lite_active() {
+            if mini::is_lite_active() && !mini::is_shutting_down() {
                 api.prevent_exit();
             }
         }
@@ -363,11 +363,48 @@ fn dispatch_tray_action(
     }
 }
 
+/// 托盘点「显示/隐藏」。
+///
+/// 不能把 `WebviewWindow` 提前捕获住：轻量模式会真的销毁 main 窗口再重建，
+/// 旧句柄从此指向一个死窗口，显隐会静默失效。所以每次都按 label 重新查。
 #[cfg(desktop)]
-fn setup_tray(
-    app: &mut tauri::App,
-    main_window: tauri::WebviewWindow,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn reveal_main_window(app_handle: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if crate::mini::is_lite_active() {
+        crate::mini::focus_lite();
+        return;
+    }
+    if let Some(win) = app_handle.get_webview_window("main") {
+        toggle_main_window(&win);
+    }
+}
+
+/// 托盘的播放控制。轻量模式下 JS 那条路（emit + eval）已经没有接收方了，
+/// 得改发窗口消息给原生播放器。
+#[cfg(desktop)]
+fn tray_transport(app_handle: &tauri::AppHandle, action: &str) {
+    use tauri::Manager;
+
+    if crate::mini::is_lite_active() {
+        let mapped = match action {
+            "play_pause" => Some(crate::mini::LiteAction::PlayPause),
+            "prev" => Some(crate::mini::LiteAction::Prev),
+            "next" => Some(crate::mini::LiteAction::Next),
+            _ => None,
+        };
+        if let Some(mapped) = mapped {
+            crate::mini::lite_action(mapped);
+        }
+        return;
+    }
+    if let Some(win) = app_handle.get_webview_window("main") {
+        dispatch_tray_action(app_handle, &win, action);
+    }
+}
+
+#[cfg(desktop)]
+fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
@@ -387,8 +424,6 @@ fn setup_tray(
         .item(&quit)
         .build()?;
 
-    let win_clone = main_window.clone();
-    let playback_window = main_window.clone();
     let app_handle = app.handle().clone();
 
     TrayIconBuilder::new()
@@ -399,27 +434,34 @@ fn setup_tray(
                 "quit" => {
                     #[cfg(debug_assertions)]
                     eprintln!("[listen1] tray quit");
-                    app_handle.exit(0);
+                    if crate::mini::is_lite_active() {
+                        // 轻量模式下 exit(0) 会被 ExitRequested 拦住。先立旗子表明这次
+                        // 关窗是要退进程，再请求关窗——原生侧写完进度后自己调 exit(0)。
+                        crate::mini::begin_shutdown();
+                        crate::mini::request_close();
+                    } else {
+                        app_handle.exit(0);
+                    }
                 }
                 "show" => {
                     #[cfg(debug_assertions)]
                     eprintln!("[listen1] tray show");
-                    toggle_main_window(&win_clone);
+                    reveal_main_window(&app_handle);
                 }
                 "play_pause" => {
                     #[cfg(debug_assertions)]
                     eprintln!("[listen1] tray play_pause");
-                    dispatch_tray_action(&app_handle, &playback_window, "play_pause");
+                    tray_transport(&app_handle, "play_pause");
                 }
                 "prev" => {
                     #[cfg(debug_assertions)]
                     eprintln!("[listen1] tray prev");
-                    dispatch_tray_action(&app_handle, &playback_window, "prev");
+                    tray_transport(&app_handle, "prev");
                 }
                 "next" => {
                     #[cfg(debug_assertions)]
                     eprintln!("[listen1] tray next");
-                    dispatch_tray_action(&app_handle, &playback_window, "next");
+                    tray_transport(&app_handle, "next");
                 }
                 _ => {}
             }
@@ -432,8 +474,7 @@ fn setup_tray(
                 ..
             } = event
             {
-                let win = tray.app_handle().get_webview_window("main").unwrap();
-                toggle_main_window(&win);
+                reveal_main_window(tray.app_handle());
             }
         })
         .build(app)?;

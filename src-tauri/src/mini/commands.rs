@@ -38,16 +38,8 @@ pub fn mini_load_snapshot() -> Option<MiniSnapshot> {
 /// （见 `lib.rs`），不给一条主动关窗的路，进程就再也退不掉。
 #[tauri::command]
 pub fn mini_exit() {
-    close_native();
+    crate::mini::request_close();
 }
-
-#[cfg(target_os = "windows")]
-fn close_native() {
-    crate::mini::win::close();
-}
-
-#[cfg(not(target_os = "windows"))]
-fn close_native() {}
 
 fn image_extension(url: &str) -> &'static str {
     let path = url.split(['?', '#']).next().unwrap_or(url).to_ascii_lowercase();
@@ -186,6 +178,12 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
         let _ = snapshot::save(&latest);
         let target = handle.clone();
         let _ = handle.run_on_main_thread(move || {
+            // 托盘点「退出」走的也是关窗这条路（原生侧要先把进度写完），
+            // 所以这里得分清是"回完整模式"还是"收尾退出"。
+            if crate::mini::is_shutting_down() {
+                target.exit(0);
+                return;
+            }
             if let Err(err) = restore_main_window(&target) {
                 eprintln!("[listen1] 回到完整模式失败：{err}");
             }

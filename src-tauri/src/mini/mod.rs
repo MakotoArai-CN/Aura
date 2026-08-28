@@ -23,6 +23,29 @@ mod win;
 
 pub use snapshot::{MiniSnapshot, MiniTrack};
 
+/// 托盘菜单能对轻量模式发的播放动作。
+#[derive(Copy, Clone, Debug)]
+pub enum LiteAction {
+    PlayPause,
+    Prev,
+    Next,
+}
+
+/// 关掉原生窗口之后是要退进程，还是回完整模式。
+///
+/// 两条路都得先让原生窗口把进度写完（见 `win::Ui::finish`），区别只在收尾：
+/// 一个建回 WebView，一个直接退。少了这个标志，轻量模式下点托盘「退出」
+/// 会被 `ExitRequested` 那边无条件拦住，变成一个没有任何反应的死按钮。
+static SHUTTING_DOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn begin_shutdown() {
+    SHUTTING_DOWN.store(true, std::sync::atomic::Ordering::Release);
+}
+
+pub fn is_shutting_down() -> bool {
+    SHUTTING_DOWN.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// 原生迷你窗口是否开着。
 ///
 /// `lib.rs` 用它决定"最后一个 WebView 没了"时要不要拦住进程退出——轻量模式下
@@ -36,6 +59,34 @@ pub fn is_lite_active() -> bool {
 pub fn is_lite_active() -> bool {
     false
 }
+
+/// 请求关掉原生窗口。真正的收尾（写回进度、决定回完整模式还是退进程）在窗口
+/// 线程的 `WM_DESTROY` 里做，这里只是把请求发过去。
+#[cfg(target_os = "windows")]
+pub fn request_close() {
+    win::close();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn request_close() {}
+
+/// 托盘点「显示」时把原生窗口拉到前面。轻量模式下没有 WebView 可以 show。
+#[cfg(target_os = "windows")]
+pub fn focus_lite() {
+    win::focus();
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn focus_lite() {}
+
+/// 把托盘的播放控制转给原生窗口。
+#[cfg(target_os = "windows")]
+pub fn lite_action(action: LiteAction) {
+    win::transport(action);
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn lite_action(_action: LiteAction) {}
 
 /// 把本地路径转成 `MediaPlayer` 能吃的 `file:///` URI。
 ///

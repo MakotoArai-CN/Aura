@@ -71,6 +71,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use super::lyrics::{self, LyricLine};
 use super::snapshot::{self, MiniSnapshot};
+use super::LiteAction;
 
 /// 逻辑尺寸。窗口不可缩放，所有布局都按这套坐标写死，再按 DPI 整体缩放。
 const LOGICAL_WIDTH: f32 = 420.0;
@@ -81,6 +82,11 @@ const TIMER_MS: u32 = 100;
 
 /// 自定义消息：请求回到完整模式。按钮和 Esc 都发它，处理逻辑只有一份。
 const WM_RETURN_TO_FULL: u32 = WM_APP + 1;
+
+/// 托盘发来的播放控制。走消息而不是直接调方法，是因为 `Ui` 只属于窗口线程。
+const WM_TRAY_PLAY_PAUSE: u32 = WM_APP + 2;
+const WM_TRAY_PREV: u32 = WM_APP + 3;
+const WM_TRAY_NEXT: u32 = WM_APP + 4;
 
 fn rgb(hex: u32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -121,6 +127,35 @@ pub fn close() {
         unsafe {
             let _ = PostMessageW(Some(HWND(raw as *mut c_void)), WM_CLOSE, WPARAM(0), LPARAM(0));
         }
+    }
+}
+
+/// 把窗口拉到前面。轻量模式下托盘点击只能做这件事——没有 WebView 可显示了。
+pub fn focus() {
+    let raw = WINDOW.load(Ordering::Acquire);
+    if raw != 0 {
+        unsafe {
+            let hwnd = HWND(raw as *mut c_void);
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+            let _ = SetForegroundWindow(hwnd);
+        }
+    }
+}
+
+/// 托盘菜单里的播放控制。轻量模式下 JS 那条路没了，只能发窗口消息，
+/// 而且必须发到窗口线程去执行——`Ui` 不是线程安全的。
+pub fn transport(action: LiteAction) {
+    let raw = WINDOW.load(Ordering::Acquire);
+    if raw == 0 {
+        return;
+    }
+    let msg = match action {
+        LiteAction::PlayPause => WM_TRAY_PLAY_PAUSE,
+        LiteAction::Prev => WM_TRAY_PREV,
+        LiteAction::Next => WM_TRAY_NEXT,
+    };
+    unsafe {
+        let _ = PostMessageW(Some(HWND(raw as *mut c_void)), msg, WPARAM(0), LPARAM(0));
     }
 }
 
@@ -1770,6 +1805,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_KEYDOWN => {
             ui.on_key((wparam.0 & 0xFFFF) as u16);
+            LRESULT(0)
+        }
+        WM_TRAY_PLAY_PAUSE => {
+            ui.toggle_play();
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
+        WM_TRAY_PREV => {
+            ui.step(-1, true);
+            let _ = InvalidateRect(Some(hwnd), None, false);
+            LRESULT(0)
+        }
+        WM_TRAY_NEXT => {
+            ui.step(1, true);
+            let _ = InvalidateRect(Some(hwnd), None, false);
             LRESULT(0)
         }
         WM_RETURN_TO_FULL | WM_CLOSE => {
