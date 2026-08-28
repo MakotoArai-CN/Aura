@@ -350,6 +350,14 @@ export const getDeviceTier = (): Promise<DeviceTier> =>
 export const setEffectTierOverride = (tier: "auto" | "ultra" | DeviceTier): Promise<void> =>
   invoke("set_effect_tier_override", { tier });
 
+/**
+ * 记录看门狗降档后的实际档位，给下一次启动的 GPU 决策用。传 "auto" 清除记录。
+ * 和 setEffectTierOverride 分开两个文件：那个是"用户锁的档"，这个是"实测撑不住"，
+ * 混在一起会让用户的自动设置被悄悄改成手动锁定。
+ */
+export const setRuntimeTier = (tier: "auto" | "ultra" | DeviceTier): Promise<void> =>
+  invoke("set_runtime_tier", { tier });
+
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!isTauriRuntime()) return;
   if (enabled) await enableAutostartPlugin();

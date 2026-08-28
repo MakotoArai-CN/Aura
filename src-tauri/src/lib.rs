@@ -173,6 +173,7 @@ pub fn run() {
             system_stats::get_resource_usage,
             device_tier::get_device_tier,
             device_tier::set_effect_tier_override,
+            device_tier::set_runtime_tier,
             update::download_and_run_update,
             update::get_update_assets,
         ]);

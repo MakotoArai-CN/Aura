@@ -19,6 +19,7 @@
     downloadAndRunUpdate,
     openExternalUrl,
     setEffectTierOverride,
+    setRuntimeTier,
     isTauriRuntime,
     type UpdateAsset,
   } from "../../lib/tauri";
@@ -67,9 +68,16 @@
   function applyEffectTier(id: AppSettings["effectTier"]) {
     if (id === $settings.effectTier) return;
     settings.patch({ effectTier: id });
+    // 用户手动动了滑条，就把「上次实测撑不住」那条记录作废：不清的话，锁到手动档再回
+    // 自动时会被旧记录悄悄压在低档，用户没有任何办法让它重新评估。内存里的降档计数
+    // 要一起归零，否则文件已清、store 还记着降了几档，两边说法互相矛盾。
+    runtimeDowngrade.set(0);
     if (!isTauriRuntime()) return;
     setEffectTierOverride(id).catch((error) => {
       console.warn("[SettingsView] 效果档位写入 Rust 失败", error);
+    });
+    setRuntimeTier("auto").catch((error) => {
+      console.warn("[SettingsView] 清除运行时降档记录失败", error);
     });
   }
 
