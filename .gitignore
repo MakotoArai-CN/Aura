@@ -15,3 +15,8 @@ src-tauri/gen/
 .DS_Store
 Thumbs.db
 *.log
+
+# 安卓签名材料：泄露等于别人可以冒名发布你的应用，永远不要提交
+*.jks
+*.keystore
+keystore.properties
