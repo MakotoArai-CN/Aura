@@ -403,6 +403,26 @@ fn tray_transport(app_handle: &tauri::AppHandle, action: &str) {
     }
 }
 
+/// 托盘点「切换轻量模式」。
+///
+/// 进轻量模式没法只在 Rust 侧完成：快照得让前端先把封面、音频、歌词都落盘
+/// （直链带签名会过期，歌词也没有磁盘缓存），所以这一半只发事件，由 WebView 自己走
+/// `enterLiteMode`。反方向是纯原生的——请求关掉原生窗口，main 窗口随后会重建。
+#[cfg(desktop)]
+fn toggle_lite_mode(app_handle: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    if crate::mini::is_lite_active() {
+        crate::mini::request_close();
+        return;
+    }
+    if let Some(win) = app_handle.get_webview_window("main") {
+        // 窗口藏着的时候先显出来：切换要走网络，成功与否都得让用户看见反馈。
+        show_main_window(&win);
+        dispatch_tray_action(app_handle, &win, "lite_mode");
+    }
+}
+
 #[cfg(desktop)]
 fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder};
@@ -413,6 +433,9 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let play_pause = MenuItemBuilder::with_id("play_pause", "播放/暂停").build(app)?;
     let prev = MenuItemBuilder::with_id("prev", "上一首").build(app)?;
     let next = MenuItemBuilder::with_id("next", "下一首").build(app)?;
+    // 一个条目管两个方向。托盘菜单没有「即将弹出」的回调，改不了文案，
+    // 所以写成中性的「切换」：在完整模式下点是进轻量，在轻量模式下点是回完整。
+    let lite_mode = MenuItemBuilder::with_id("lite_mode", "切换轻量模式").build(app)?;
 
     let menu = MenuBuilder::new(app)
         .item(&show)
@@ -420,6 +443,8 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         .item(&play_pause)
         .item(&prev)
         .item(&next)
+        .separator()
+        .item(&lite_mode)
         .separator()
         .item(&quit)
         .build()?;
@@ -462,6 +487,11 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                     #[cfg(debug_assertions)]
                     eprintln!("[listen1] tray next");
                     tray_transport(&app_handle, "next");
+                }
+                "lite_mode" => {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[listen1] tray lite_mode");
+                    toggle_lite_mode(&app_handle);
                 }
                 _ => {}
             }

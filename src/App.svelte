@@ -14,6 +14,8 @@
   import LyricSync from "./components/LyricSync.svelte";
   import Toast from "./components/ui/Toast.svelte";
   import { player } from "./lib/player";
+  import { playerState } from "./lib/stores/player";
+  import { toast } from "./lib/stores/toast";
   import {
     defaultCacheDir,
     defaultMusicDir,
@@ -32,7 +34,7 @@
   import { startEffectWatchdog } from "./lib/effectWatchdog";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "./lib/shortcuts";
   import { bindPlayerKeyboard } from "./lib/keyboard";
-  import { resumeFromLiteSnapshot } from "./lib/liteMode";
+  import { enterLiteMode, resumeFromLiteSnapshot } from "./lib/liteMode";
   import { localmusic } from "./lib/providers/localmusic";
 
   type View =
@@ -79,6 +81,31 @@
     else currentView = { type: "discover", source: "netease" };
   }
 
+  /**
+   * 托盘点「切换轻量模式」走到这里。
+   *
+   * 进轻量模式必须由前端发起：快照要先把封面、音频、歌词落盘，Rust 侧拿不到这些能力。
+   * 反方向（回完整模式）是纯原生的，Rust 自己就处理完了，不会发到这里。
+   */
+  let liteSwitching = false;
+  async function switchToLiteModeFromTray() {
+    if (liteSwitching) return;
+    if (($playerState.playlist ?? []).length === 0) {
+      toast.warn("播放队列是空的，先放一首歌再切轻量模式");
+      return;
+    }
+    liteSwitching = true;
+    try {
+      await enterLiteMode();
+    } catch (error) {
+      // 走到这里说明原生窗口没建起来，WebView 还活着，原地留在完整模式即可。
+      console.warn("[App] 托盘切换轻量模式失败", error);
+      toast.error("进入轻量模式失败，已留在当前界面");
+    } finally {
+      liteSwitching = false;
+    }
+  }
+
   function handleTrayAction(payload: unknown) {
     const action = typeof payload === "string"
       ? payload
@@ -96,6 +123,7 @@
     if (action === "play_pause") player.togglePlayPause();
     else if (action === "prev") player.skip("prev");
     else if (action === "next") player.skip("next");
+    else if (action === "lite_mode") void switchToLiteModeFromTray();
   }
 
   $effect(() => {

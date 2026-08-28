@@ -100,6 +100,12 @@ pub fn lite_action(_action: LiteAction) {}
 /// 编码——`Uri::CreateUri` 自己会处理，提前编码反而会把已经编码过的路径搞坏。
 fn file_uri(path: &str) -> String {
     let normalized = path.replace('\\', "/");
+    // UNC（`\\NAS\music\a.flac`）的主机名是 URI 的 authority，不是路径的一段。
+    // 跟本机路径一样把前导斜杠削掉再补 `file:///`，会得到 `file:///NAS/music/a.flac`，
+    // 这是在本机根目录下找 NAS 文件夹，必然打不开。
+    if let Some(rest) = normalized.strip_prefix("//") {
+        return format!("file://{}", rest.trim_start_matches('/'));
+    }
     let trimmed = normalized.trim_start_matches('/');
     format!("file:///{trimmed}")
 }
@@ -157,6 +163,13 @@ mod tests {
             playable_uri(&item).unwrap(),
             "file:///C:/Users/me/My Music/a.flac"
         );
+    }
+
+    #[test]
+    fn unc_path_keeps_the_host_as_the_uri_authority() {
+        let mut item = track("1", "kuwo");
+        item.local_path = Some(r"\\NAS\music\a.flac".to_string());
+        assert_eq!(playable_uri(&item).unwrap(), "file://NAS/music/a.flac");
     }
 
     #[test]
