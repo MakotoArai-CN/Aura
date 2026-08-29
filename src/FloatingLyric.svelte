@@ -226,7 +226,10 @@
   }
 
   function patchLyricWindow(partial: Partial<AppSettings["lyricWindow"]>) {
-    // 工具栏 A±/◐± 等调整：只发请求给主窗，主窗写 settings 后回流。
+    // 和 toggleLock 一样先乐观更新本地，再发请求给主窗，主窗写 settings 后回流校正。
+    // 只发不改的话，A±/◐± 按下去要等一整趟 float → main → Rust → float 的往返才有反应，
+    // 这条回路哪一环断了（主窗没挂上监听、payload 被去重掉），按钮就是纯粹点不动。
+    lyricWindow = { ...lyricWindow, ...partial };
     void emitTo("main", "float-lyric-settings-changed", { lyricWindow: partial }).catch(() => undefined);
   }
 

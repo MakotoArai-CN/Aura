@@ -384,6 +384,10 @@ pub fn show_float_window(
         .max_inner_size(1920.0, 220.0)
         .decorations(false)
         .shadow(false)
+        // 必须开透明：锁定状态下前端会把 --float-bg-alpha 设成 0 来实现「只剩歌词」，
+        // 窗口要是不透明，透出来的就是 WebView 默认的白底，而歌词文字本身是白的，
+        // 白底白字，看起来就是整个窗口全白、什么都没有。
+        .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
         .visible(true)
