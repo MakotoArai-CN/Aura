@@ -431,7 +431,9 @@
   }
 
   .detail-head-cover .covershadow {
-    transition: all 0.4s;
+    /* 只有 opacity 会变。`all` 会把 filter 一起纳入，档位切换改了
+       --visual-hero-shadow 时就成了一段每帧重做高斯的 400ms 动画。 */
+    transition: opacity 0.4s ease;
     opacity: 0;
     position: absolute;
     top: 12px;
@@ -449,7 +451,8 @@
     z-index: 2;
     cursor: pointer;
     opacity: 0;
-    transition: all 0.2s ease 0s;
+    /* 同理：只让 opacity / background-color 走过渡，别把 backdrop-filter 带进来。 */
+    transition: opacity 0.2s ease, background-color 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -510,7 +513,10 @@
     background-color: var(--button-background-color);
     color: var(--text-default-color);
     text-decoration: none;
-    transition: 0.2s;
+    /* 只有 background-color / color 会变（favorited 与 hover 两态）。`.playadd-button`
+       那一支还会改 flex-basis 和 padding，`all` 简写会把它们一起插值——那是布局属性，
+       而这排按钮在同一个 flex 行里，一个变宽全行跟着挪。显式列举挡掉。 */
+    transition: background-color 0.2s ease, color 0.2s ease;
   }
 
   .playlist-button.favorited {
@@ -562,7 +568,8 @@
     justify-content: center;
     min-height: 42px;
     cursor: pointer;
-    transition: 0.2s;
+    /* 这个元素自身没有任何状态类会改属性（hover 效果在里层的 svg 上），
+       挂 `transition: 0.2s` 只是给未来埋雷。去掉。 */
     padding: 0 14px 0 0;
   }
 
@@ -580,7 +587,9 @@
   .detail-songlist.playlist-songlist {
     margin: 0 2vw;
     padding-top: 13px;
-    transition: 0.3s;
+    /* 这里挂 `transition: 0.3s`（= all）尤其危险：这是整条歌单列表的容器，
+       margin 用的是 vw —— 窗口一变宽，margin 就要在 300ms 里逐帧插值，
+       每帧重排整张列表。窗口缩放本来就是最吃性能的时刻。去掉。 */
   }
 
   ul.detail-songlist .playlist-search {
@@ -746,7 +755,8 @@
     border: 1px solid var(--button-border-color);
     color: var(--text-default-color);
     min-width: unset; min-height: unset;
-    transition: all 0.2s;
+    /* transform / background 都不碰布局，显式列举即可。 */
+    transition: transform 0.2s var(--ease-out-quart, ease), background-color 0.2s ease;
   }
 
   .dialog-btn:hover { transform: scale(1.05); background: var(--button-hover-background-color); }

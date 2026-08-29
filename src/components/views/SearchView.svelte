@@ -297,7 +297,8 @@
     color: var(--text-default-color);
     cursor: pointer;
     min-width: unset; min-height: unset;
-    transition: all 0.2s;
+    /* transform / background 都不碰布局。 */
+    transition: transform 0.2s ease, background-color 0.2s ease;
   }
 
   .search-action-btn:hover { transform: scale(1.05); background: var(--button-hover-background-color); }
@@ -379,7 +380,8 @@
     color: var(--text-default-color);
     cursor: pointer;
     min-width: unset; min-height: unset;
-    transition: all 0.2s;
+    /* disabled 态只改 opacity 与 transform，hover 改 transform/background。 */
+    transition: transform 0.2s ease, background-color 0.2s ease, opacity 0.2s ease;
     opacity: 0.78;
   }
 

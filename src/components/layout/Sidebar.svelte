@@ -344,7 +344,10 @@
     margin-bottom: 0;
     padding-bottom: 10px;
     border-bottom: 1px solid var(--sidebar-splitter);
-    transition: 0.2s;
+    /* 展开态只改 border-bottom-color（见 .opensidebar > .logo-content）。
+       原来的 `0.2s` 是 all 简写，而这一行是 flex 容器、里面的 logo-title span 展开时
+       width: 0 → 90px —— all 会把子元素引起的自身尺寸变化也纳入插值。显式列举。 */
+    transition: border-bottom-color 0.2s ease;
     cursor: pointer;
     flex-shrink: 0;
   }
@@ -356,7 +359,7 @@
     align-items: center;
     justify-content: center;
     flex: 0 0 44px;
-    transition: 0.2s;
+    /* 这个元素没有任何状态类会改它的属性，过渡是死的。去掉。 */
   }
 
   .logo-content:hover .logo-mark { opacity: 0.86; }
@@ -376,7 +379,11 @@
     font-weight: 760;
     letter-spacing: 0;
     white-space: nowrap;
-    transition: 0.2s;
+    /* width 0 → 90px 是可插值的，而且它和外层 .sidebar-content 的 width 过渡
+       （74px → 230px）本来就是同一次侧栏展开重排，所以这条留着不额外增加代价。
+       显式列举只为挡掉 all：以后有人往展开态加个 margin/padding 就不会悄悄
+       多出一条布局插值。 */
+    transition: opacity 0.2s ease, width 0.2s ease;
   }
 
   .opensidebar > .logo-content { border-bottom: 1px solid transparent; }
@@ -417,7 +424,8 @@
     display: flex;
     align-items: center;
     color: var(--link-default-color);
-    transition: 0.2s;
+    /* 只有 hover 时 color 变。 */
+    transition: color 0.2s ease;
   }
   .sidebar-icon-btn:hover { color: var(--text-default-color); }
   .sidebar-icon-btn svg { stroke: currentColor; }
@@ -481,7 +489,11 @@
     user-select: none;
     white-space: nowrap;
     opacity: 0;
-    transition: 0.2s;
+    /* 只过渡 opacity。展开态是 `width: 0 → auto` + `flex: 0 → 1` —— auto 不可插值，
+       属于离散跳变，原来那 200ms 里 width 本来就是一帧跳完、只有 opacity 在动；
+       而 all 简写让每个分组标题在侧栏展开时都参与一次布局插值。
+       尺寸一帧到位、文字淡入，观感和原来一致。 */
+    transition: opacity 0.2s ease;
     width: 0;
     flex: 0;
   }

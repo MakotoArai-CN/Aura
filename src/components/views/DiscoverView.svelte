@@ -189,14 +189,7 @@
   .source-button {
     display: inline-block;
     cursor: pointer;
-    transition: 0.1s;
     flex-shrink: 0;
-  }
-
-  .source-button:hover,
-  .source-button.active {
-    transition: 0.2s;
-    padding: 0;
   }
 
   .source-button .buttontext {
@@ -207,11 +200,21 @@
     line-clamp: 1;
     -webkit-box-orient: vertical;
     font-size: 14px;
-    /* 横向留白改由 .source-list 的 gap 负责，这里只留 padding 给 hover 背景兜边。 */
+    /* 横向留白改由 .source-list 的 gap 负责，这里只留 padding 给 hover 背景兜边。
+       两个状态用同一套 padding，免得它也参与插值。 */
     margin: 4px 0;
-    padding: 2px 8px;
+    padding: 6px 10px;
+    border-radius: 10px;
     color: var(--text-subtitle-color);
-    transition: 0.1s;
+    white-space: nowrap;
+    /* 只过渡 color / background-color —— 这两个只走 paint。
+       原来是 `transition: 0.1s`（= all），而选中态把 font-size 从 14px 提到 24px，
+       于是字号被插值：每帧变一次字号就是整条横向列表重新排版一次，而这是一条
+       overflow-x: auto 的 flex 行，后面每一项都要跟着挪。
+       字号/字重现在瞬时切换——一次重排，而不是 200ms 里几十次。
+       （不用 transform: scale 平滑这个尺寸差：那样布局盒仍按 14px 算，放大的字会
+       压到相邻项上面去。宁可尺寸硬切。） */
+    transition: color 0.18s ease, background-color 0.18s ease;
   }
 
   .source-button:hover .buttontext,
@@ -222,12 +225,7 @@
     font-size: 24px;
     font-weight: 700;
     text-decoration: none;
-    border-radius: 10px;
-    padding: 6px 10px;
-    transition: all 0.2s, background 0.3s;
     -webkit-user-drag: none;
-    margin: 0;
-    white-space: nowrap;
   }
 
   .source-button.active .buttontext,
@@ -257,7 +255,9 @@
     font-weight: 600;
     font-size: 16px;
     border-radius: 10px;
-    transition: all 0.2s;
+    /* 只有 background / color 会变，显式列举即可。原来的 `all` 简写在这里没造成
+       实际损失，但列清楚能防止以后有人往选中态加个 padding 就悄悄引入逐帧重排。 */
+    transition: background-color 0.2s ease, color 0.2s ease;
     cursor: pointer;
   }
 
@@ -265,7 +265,6 @@
   .filter-item.active {
     background: var(--theme-color-hover);
     color: var(--theme-color);
-    transition: all 0.2s;
   }
 
   .playlist-covers {
@@ -305,7 +304,10 @@
   }
 
   .u-cover .covershadow {
-    transition: all 0.4s;
+    /* 只有 opacity 会变（hover 时 0→1）。原来的 `all 0.4s` 会连 filter 一起纳入
+       —— filter 值本身不变所以侥幸没事，但一旦档位切换改了 --visual-hero-shadow，
+       就会变成 400ms 的模糊半径动画，每帧重新做一次高斯。显式列举挡掉这个可能。 */
+    transition: opacity 0.4s ease;
     opacity: 0;
     position: absolute;
     top: 12px;
@@ -328,13 +330,16 @@
     margin-bottom: 2px;
     cursor: pointer;
     z-index: 1;
-    transition: all 0.1s ease-in-out 0s;
+    /* 悬浮上浮改用 transform 而不是 margin。原来 hover 时 margin-top: -10px /
+       margin-bottom: 10px，两个都是布局属性：一张卡片上浮就要重排整个网格
+       （flex-wrap 的多行布局，后面每一项都可能换行位置），列表越长越明显。
+       translateY 只走合成，一张卡上浮不影响任何邻居。 */
+    transform: translateY(0);
+    transition: transform 0.14s ease-in-out;
   }
 
   .u-cover:hover img {
-    margin-top: -10px;
-    margin-bottom: 10px;
-    padding-bottom: 0;
+    transform: translateY(-10px);
   }
 
   .u-cover:hover .covershadow {
@@ -347,7 +352,9 @@
     z-index: 2;
     cursor: pointer;
     opacity: 0;
-    transition: all 0.2s ease 0s;
+    /* 只有 opacity 和 background 会变。原来的 `all` 会把 backdrop-filter 一起带上，
+       档位切换时就变成一段每帧重采样的模糊动画。 */
+    transition: opacity 0.2s ease, background-color 0.2s ease;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -453,6 +460,5 @@
   /* Searchbox — matches original: margin-bottom accounts for floating player */
   .searchbox {
     margin-bottom: 150px;
-    transition: 0.3s;
   }
 </style>

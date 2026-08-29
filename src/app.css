@@ -771,6 +771,11 @@ input, select, textarea { font: inherit; color: inherit; }
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    /* delay 也必须归零。只压 duration 的话，任何带延迟的过渡都变成"纯等待然后瞬间
+       出现"，比不减弱动效更难受。播放器展开那条帘的入场延迟就是一整个动画时长，
+       原先要在组件里单独打补丁，现在全局兜住。 */
+    transition-delay: 0s !important;
+    animation-delay: 0s !important;
     scroll-behavior: auto !important;
   }
 }
