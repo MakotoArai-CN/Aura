@@ -403,6 +403,33 @@ fn tray_transport(app_handle: &tauri::AppHandle, action: &str) {
     }
 }
 
+/// 托盘那个「切换/退出轻量模式」条目的句柄。
+///
+/// 托盘菜单没有「即将弹出」的回调，文案改不了是因为拿不到条目——所以建的时候留一份。
+#[cfg(desktop)]
+static LITE_MENU_ITEM: std::sync::OnceLock<tauri::menu::MenuItem<tauri::Wry>> =
+    std::sync::OnceLock::new();
+
+/// 按当前是否处在轻量模式刷新托盘条目的文案。
+///
+/// 进/出轻量模式时各调一次。菜单项的改动必须回主线程做——macOS 上在别的线程动菜单
+/// 会直接崩，Windows 上虽然能过，但没有理由两个平台走不同的路。
+#[cfg(desktop)]
+pub fn sync_lite_menu_label(app: &tauri::AppHandle, lite_active: bool) {
+    let Some(item) = LITE_MENU_ITEM.get() else {
+        return;
+    };
+    let item = item.clone();
+    let text = if lite_active {
+        "退出轻量模式"
+    } else {
+        "切换轻量模式"
+    };
+    let _ = app.run_on_main_thread(move || {
+        let _ = item.set_text(text);
+    });
+}
+
 /// 托盘点「切换轻量模式」。
 ///
 /// 进轻量模式没法只在 Rust 侧完成：快照得让前端先把封面、音频、歌词都落盘
@@ -433,9 +460,11 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let play_pause = MenuItemBuilder::with_id("play_pause", "播放/暂停").build(app)?;
     let prev = MenuItemBuilder::with_id("prev", "上一首").build(app)?;
     let next = MenuItemBuilder::with_id("next", "下一首").build(app)?;
-    // 一个条目管两个方向。托盘菜单没有「即将弹出」的回调，改不了文案，
-    // 所以写成中性的「切换」：在完整模式下点是进轻量，在轻量模式下点是回完整。
+    // 一个条目管两个方向，文案跟着状态走：完整模式下是「切换轻量模式」，
+    // 进去之后由 sync_lite_menu_label 改成「退出轻量模式」。
     let lite_mode = MenuItemBuilder::with_id("lite_mode", "切换轻量模式").build(app)?;
+    // 留一份句柄，否则状态变化时没有东西可以 set_text。
+    let _ = LITE_MENU_ITEM.set(lite_mode.clone());
 
     let menu = MenuBuilder::new(app)
         .item(&show)

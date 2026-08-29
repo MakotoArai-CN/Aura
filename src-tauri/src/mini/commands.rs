@@ -188,8 +188,14 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
             if let Err(err) = restore_main_window(&target) {
                 eprintln!("[listen1] 回到完整模式失败：{err}");
             }
+            // 回到完整模式了，托盘那条改回「切换轻量模式」。
+            crate::sync_lite_menu_label(&target, false);
         });
     })?;
+
+    // 原生窗口确实活着了，托盘条目改成「退出轻量模式」。
+    // 放在 win::open 之后：建窗失败时不能改文案，否则托盘会谎报状态。
+    crate::sync_lite_menu_label(&app, true);
 
     // 原生窗口确实活着了，这才销毁 WebView——轻量模式的"0 webui"就是在这一步实现的。
     if let Some(main) = app.get_webview_window("main") {
