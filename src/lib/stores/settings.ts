@@ -176,19 +176,35 @@ function loadSettings(): AppSettings {
   return { ...defaults };
 }
 
+/**
+ * 需要去抖落盘的键：只有会被"拖"出来的那几个。
+ *
+ * range 滑条的 oninput 按像素连发，每次都全量 stringify 整个设置对象太浪费。
+ * 除此之外的设置全是点一下就定的开关/单选，必须**同步**落盘——托盘「退出」走的是
+ * Rust 侧 `app.exit(0)`，进程说没就没，前端没有 beforeunload 可以补救。GPU 开关就
+ * 栽在这上面：拨完 200ms 内退出，localStorage 里根本没写进去，下次启动读回默认值
+ * false，再被挂载时的自愈回写把 Rust 那份开关文件也刷成 off，用户看到的就是"我明明
+ * 开了 GPU"。
+ */
+const DEBOUNCED_KEYS = new Set<keyof AppSettings>(["zoomLevel", "lyricWindow"]);
+
 function createSettingsStore() {
   const { subscribe, set, update } = writable<AppSettings>(loadSettings());
   let persistTimer: ReturnType<typeof setTimeout> | null = null;
 
-  function persist(next: AppSettings) {
-    if (persistTimer) clearTimeout(persistTimer);
-    // 防抖合并连续 patch（如音量拖动、歌词偏移连点），避免每次交互全量 stringify。
-    persistTimer = setTimeout(() => {
+  function writeNow(next: AppSettings) {
+    if (persistTimer) {
+      clearTimeout(persistTimer);
       persistTimer = null;
-      try {
-        localStorage.setItem("listen1_settings", JSON.stringify(next));
-      } catch {}
-    }, 200);
+    }
+    try {
+      localStorage.setItem("listen1_settings", JSON.stringify(next));
+    } catch {}
+  }
+
+  function persistDebounced(next: AppSettings) {
+    if (persistTimer) clearTimeout(persistTimer);
+    persistTimer = setTimeout(() => writeNow(next), 200);
   }
 
   return {
@@ -196,7 +212,7 @@ function createSettingsStore() {
     update,
     set(s: AppSettings) {
       set(s);
-      persist(s);
+      writeNow(s);
     },
     patch(partial: Partial<AppSettings>) {
       let next = {} as AppSettings;
@@ -204,7 +220,12 @@ function createSettingsStore() {
         next = { ...s, ...partial };
         return next;
       });
-      persist(next);
+      const keys = Object.keys(partial) as (keyof AppSettings)[];
+      if (keys.length > 0 && keys.every((key) => DEBOUNCED_KEYS.has(key))) {
+        persistDebounced(next);
+      } else {
+        writeNow(next);
+      }
     },
   };
 }

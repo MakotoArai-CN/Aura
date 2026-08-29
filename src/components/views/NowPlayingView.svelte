@@ -2,7 +2,7 @@
   import { playerState, playbackClock } from "../../lib/stores/player";
   import { MediaService } from "../../lib/providers/index";
   import { settings } from "../../lib/stores/settings";
-  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
+  import { cssUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import { deviceTier } from "../../lib/stores/device";
   import { getActiveLyricPayload, getLineVariant, getLyricsVariantAvailability, getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, parseLyric, type LyricLine, type LyricVariantMode } from "../../lib/lyrics";
   import { runOnActionKey } from "../../lib/keyboard";
@@ -202,7 +202,7 @@
 
   {#if bgUrl && $settings.enableNowplayingCoverBackground && $deviceTier !== "low"}
     <div class="bgwrapper">
-      <div class="bg" style:background-image={cssImageUrl(bgBlurUrl)}></div>
+      <div class="bg" style:background-image={cssUrl(bgBlurUrl)}></div>
     </div>
   {/if}
 
@@ -219,7 +219,7 @@
       <div>
         <div class="detail-head-cover">
           {#if bgUrl}
-            <div class="covershadow" style:background-image={cssImageUrl(bgBlurUrl)}></div>
+            <div class="covershadow" style:background-image={cssUrl(bgBlurUrl)}></div>
             <img src={bgUrl} alt="cover" />
           {:else}
             <div class="empty-cover">

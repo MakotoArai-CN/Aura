@@ -1,6 +1,6 @@
 <script lang="ts">
   import { MediaService } from "../../lib/providers/index";
-  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
+  import { cssUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
   import { infiniteScroll } from "../../lib/infiniteScroll";
   import type { PlaylistFilter, PlaylistInfo } from "../../lib/providers/types";
@@ -124,7 +124,12 @@
         <div class="u-cover" onclick={() => navigate({ type: "playlist", id: pl.id })}
           role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, () => navigate({ type: "playlist", id: pl.id }))}>
           {#if coverUrl}
-            <div class="covershadow" style:background-image={cssImageUrl(pl.cover_img_url)}></div>
+            <!-- 悬停时那层投影用的是同一张 150px 缩略图，不能用原图：这层只是被
+                 --visual-hero-shadow 模糊后垫在封面底下的影子，看不出分辨率差别，
+                 但每张卡多解一张 1000px 原图（≈4MB RGBA）就是几百 MB 常驻。
+                 opacity:0 的元素照样会被 Chromium 下载并解码，指望"没显示就不加载"
+                 是不成立的。 -->
+            <div class="covershadow" style:background-image={cssUrl(coverUrl)}></div>
             <img src={coverUrl} alt={pl.title}
               onerror={(e) => { (e.currentTarget as HTMLImageElement).style.display = "none"; }} />
           {:else}
@@ -175,6 +180,10 @@
     align-items: center;
     flex-wrap: nowrap;
     overflow-x: auto;
+    /* 间距放在容器上：选中项字号从 14px 跳到 24px 并换一套 margin/padding，
+       靠子元素自己的 margin 撑间距会让相邻两项的距离随选中状态忽宽忽窄，
+       看起来就是挤在一处。gap 与状态无关，横向留白才稳定。 */
+    gap: 10px;
   }
 
   .source-button {
@@ -198,7 +207,9 @@
     line-clamp: 1;
     -webkit-box-orient: vertical;
     font-size: 14px;
-    margin: 4px 10px;
+    /* 横向留白改由 .source-list 的 gap 负责，这里只留 padding 给 hover 背景兜边。 */
+    margin: 4px 0;
+    padding: 2px 8px;
     color: var(--text-subtitle-color);
     transition: 0.1s;
   }
@@ -215,7 +226,7 @@
     padding: 6px 10px;
     transition: all 0.2s, background 0.3s;
     -webkit-user-drag: none;
-    margin: 0 12px;
+    margin: 0;
     white-space: nowrap;
   }
 

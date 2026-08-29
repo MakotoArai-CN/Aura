@@ -81,8 +81,19 @@ export function sizedImageUrl(url: string | null | undefined, size: number): str
   return proxied;
 }
 
+/**
+ * 把**已经解析好**的地址包进 CSS `url()`。
+ *
+ * 和 `cssImageUrl` 的区别是它不再走一遍 `proxyResourceUrl`。二次代理不是幂等的：
+ * 指向本机流服务器的 `…/stream/<encoded>` 会被 `decodeStreamTarget` 解回原始外链，
+ * 于是 B 站那种必须带 Referer 的封面直接 403。凡是先经过 `sizedImageUrl` 再进
+ * `background-image` 的地方都该用这个。
+ */
+export function cssUrl(resolved?: string | null): string {
+  if (!resolved) return "";
+  return `url("${resolved.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
+}
+
 export function cssImageUrl(url?: string | null): string {
-  const proxied = proxyResourceUrl(url);
-  if (!proxied) return "";
-  return `url("${proxied.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}")`;
+  return cssUrl(proxyResourceUrl(url));
 }
