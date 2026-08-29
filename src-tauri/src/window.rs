@@ -366,7 +366,8 @@ pub fn show_float_window(
         .map_err(|e| e.to_string())?;
 
     // Create float window if it doesn't exist yet
-    if app.get_webview_window("float").is_none() {
+    let just_created = app.get_webview_window("float").is_none();
+    if just_created {
         #[cfg(debug_assertions)]
         let float_url = tauri::WebviewUrl::External(dev_float_url.clone());
         #[cfg(not(debug_assertions))]
@@ -394,16 +395,20 @@ pub fn show_float_window(
         let _ = float.set_shadow(false);
         float.show().map_err(|e| e.to_string())?;
         apply_float_ignore_from_settings(&app, &settings_state);
+        // 只有复用已经存在的窗口时才重新导航——dev server 重启过的话它可能还停在
+        // 一个已经没人监听的地址上。刚 build 出来的窗口正在加载同一个地址，这时候再
+        // navigate 一次会把那次导航打断，WebView2 可能就停在 about:blank 上不动了。
         #[cfg(debug_assertions)]
-        {
+        if !just_created {
             match float.navigate(dev_float_url.clone()) {
                 Ok(()) => eprintln!("[listen1] float navigate requested {dev_float_url}"),
                 Err(error) => eprintln!("[listen1] float navigate failed: {error}"),
             }
-            match float.url() {
-                Ok(url) => eprintln!("[listen1] float url={url}"),
-                Err(error) => eprintln!("[listen1] float url read failed: {error}"),
-            }
+        }
+        #[cfg(debug_assertions)]
+        match float.url() {
+            Ok(url) => eprintln!("[listen1] float url={url} just_created={just_created}"),
+            Err(error) => eprintln!("[listen1] float url read failed: {error}"),
         }
     }
     Ok(())
