@@ -13,7 +13,13 @@ function createSecretKey(size: number): string {
 function aesEncrypt(text: string, secKey: string, algo: "AES-CBC" | "AES-ECB"): forge.util.ByteStringBuffer {
   const cipher = forge.cipher.createCipher(algo, secKey);
   cipher.start({ iv: "0102030405060708" });
-  cipher.update(forge.util.createBuffer(text));
+  // 必须先 encodeUtf8。forge 的 createBuffer 默认按 'raw' 处理字符串，也就是每个 UTF-16
+  // 码元只取低 8 位：`周杰伦`（U+5468 U+676F U+4F26）会变成 0x68 0x70 0x26 也就是 "hp&"，
+  // 连带把 JSON 的引号结构都撞坏。实测原来加密的明文是 {"s":v\x0fp&","limit":30}。
+  // 也就是说带中文的网易云搜索/歌单请求一直在发垃圾，只是 index.ts 是多源聚合，
+  // 网易云这一路返回空会被其他源的结果盖住，表面上看不出来。
+  // 纯 ASCII 输入下 encodeUtf8 是恒等变换，原来能用的请求密文不变。
+  cipher.update(forge.util.createBuffer(forge.util.encodeUtf8(text)));
   cipher.finish();
   return cipher.output;
 }
