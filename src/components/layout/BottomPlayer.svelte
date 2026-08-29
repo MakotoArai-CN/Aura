@@ -106,10 +106,20 @@
   );
   // 相邻封面常驻显示；只有最低档才省掉这两张解码位图。
   let showAdjacentCovers = $derived($deviceTier !== "low");
-  // 播放页首次打开前不挂载（隐藏的完整歌词 DOM 常驻内存无意义），打开过一次后保持挂载以保留滑出动画。
-  let nowPlayingEverOpened = $state(false);
+  /**
+   * 播放页是否已挂载。**一有播放内容就挂**，不等第一次点开。
+   *
+   * 原来是"首次打开前不挂载"，理由是隐藏的完整歌词 DOM 常驻内存没意义。但那样第一次
+   * 展开时整棵子树是在动画进行中挂载 + 首次布局的——用户看到的就是"展开完了内容才出来"，
+   * 而且只在第一次出现，最难自查。展开动画的整个设计前提是"内容早就按最终尺寸布局好，
+   * 只是被裁着"（见 NowPlayingView 的 .songdetail-wrapper），首次挂载正好把这个前提打破。
+   *
+   * 挂上之后不再卸载：队列清空又装满时再卸载/重挂等于把首次开销原样搬到后面某一次展开。
+   * 收起态它是 visibility: hidden + 裁到 0，不参与绘制，代价只有一次布局和这棵 DOM 本身。
+   */
+  let nowPlayingMounted = $state(false);
   $effect(() => {
-    if (nowPlayingOpen) nowPlayingEverOpened = true;
+    if (nowPlayingOpen || hasPlayerContent) nowPlayingMounted = true;
   });
   // 三个窗口按钮翻下来时会盖住歌词区右上角的进度微调/翻译按钮，翻出期间让那一排
   // 整体下移躲开。用 state 而不是纯 CSS：那两个按钮在 NowPlayingView 里，而
@@ -539,7 +549,7 @@
     }}
   >
     <LiquidGlassSurface target={footerMainEl} enabled={glassSurfaceEnabled} />
-    {#if nowPlayingEverOpened}
+    {#if nowPlayingMounted}
       <NowPlayingView visible={nowPlayingOpen} onClose={onCloseNowPlaying} windowControlsRevealed={wcButtonsRevealed} windowControlsEl={wcInnerEl} />
     {/if}
 
