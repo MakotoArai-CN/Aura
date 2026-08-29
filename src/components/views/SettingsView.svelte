@@ -59,7 +59,13 @@
   let effectTierHint = $derived(
     $settings.effectTier === "auto"
       ? `按设备性能自动调节，当前：${TIER_LABELS[$deviceTier] ?? $deviceTier}` +
-        ($runtimeDowngrade > 0 ? `（检测为${TIER_LABELS[$detectedTier]}，因 CPU 占用偏高已降 ${$runtimeDowngrade} 档）` : "")
+        // 没开 GPU 时自动档被钉在中档（见 stores/device.ts 的 deviceTier）。
+        // 不说明的话用户只会看到"检测是高端机、档位却是中"，无从判断是不是坏了。
+        (!$activeGpuAcceleration
+          ? "（本次启动未启用 GPU 加速，常驻模糊只能靠 CPU 每帧重算，故自动降到此档；开启下方的 GPU 加速并重启即可恢复完整效果）"
+          : $runtimeDowngrade > 0
+            ? `（检测为${TIER_LABELS[$detectedTier]}，因 CPU 占用偏高已降 ${$runtimeDowngrade} 档）`
+            : "")
       : `已手动锁定为${TIER_LABELS[$settings.effectTier] ?? $settings.effectTier}，不再自动升降`
   );
 

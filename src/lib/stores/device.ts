@@ -35,14 +35,48 @@ function stepDown(tier: VisualTier, steps: number): VisualTier {
 }
 
 /**
+ * 本次启动**实际**生效的 GPU 加速状态。
+ *
+ * 之所以不直接用 `$settings.enableGpuAcceleration`：那是"下一次启动想要的值"，
+ * 用户刚拨动开关时两者就不一致了。分开存才能诚实地告诉用户"要重启才生效"，
+ * 而不是拨完就装作已经生效。
+ *
+ * 初值取 Rust 在页面脚本最前面注入的 `__AURA_GPU_ACTIVE__`（见 lib.rs 的
+ * `gpu_active_plugin`），**必须同步拿到**：下面的 `deviceTier` 要用它决定视觉档位，
+ * 而 async 读回会让启动头几十毫秒先按"没有 GPU"渲染一遍再翻回来，肉眼能看到一次
+ * 观感跳变。非 Tauri 运行时（浏览器里直接开 dist）读不到这个全局，退回 false，
+ * 也就是按"没有硬件合成"处理——那正是浏览器里跑一个桌面壳最保守的假设。
+ */
+function injectedGpuActive(): boolean {
+  if (typeof window === "undefined") return false;
+  return (window as Window & { __AURA_GPU_ACTIVE__?: boolean }).__AURA_GPU_ACTIVE__ === true;
+}
+
+export const activeGpuAcceleration = writable<boolean>(injectedGpuActive());
+
+/**
  * 有效档位：手动选了就用手动的（看门狗与检测都不再插手），"auto" 才走
  * 「检测结果 - 已降档数」。名字保持 deviceTier 不变，消费方无需改动。
+ *
+ * "auto" 且本次启动没有 GPU 时直接落到 mid。硬件检测只看"有没有独显"，而 GPU 加速
+ * 现在是一条独立开关（默认关闭），于是"有独显但开关关着"的机器会被判成 high，
+ * 拿到 `--visual-backdrop: saturate(180%) blur(20px)` 和 `LiquidGlassSurface` 的
+ * `backdrop-filter: url(#SVG位移滤镜)`，然后全部在 CPU 上每帧重跑——实测这套组合下
+ * gpu-process 常驻 66% 一个核，同一台机器把开关打开后总 CPU 掉到 0.3~2.2%。
+ *
+ * 选 mid 不选 low：mid 让 `--visual-backdrop` 回到 `:root` 的 `none`（底栏的常驻毛玻璃
+ * 没了）、`--glass-blur` 与 `--nav-backdrop-filter` 也是 none，而液态玻璃表面只在
+ * high/ultra 启用，所以 `url()` 位移滤镜一并消失；交互动效则一个不少。low 会连图层
+ * 提升和阴影一起砍掉，为了省 CPU 把观感降到那一步没有必要。
+ *
+ * 手动锁了 high/ultra 的人是明确要那个效果，不替他降——他知道自己在换什么。
  */
 export const deviceTier = derived(
-  [detectedTier, runtimeDowngrade, settings],
-  ([$detected, $downgrade, $settings]): VisualTier => {
+  [detectedTier, runtimeDowngrade, settings, activeGpuAcceleration],
+  ([$detected, $downgrade, $settings, $gpuActive]): VisualTier => {
     const manual = $settings.effectTier;
     if (manual !== "auto") return manual;
+    if (!$gpuActive) return "mid";
     return stepDown($detected, $downgrade);
   },
 );
@@ -51,6 +85,9 @@ export const deviceTier = derived(
 export function applyRuntimeDowngrade(): VisualTier {
   const current = get(deviceTier);
   if (get(settings).effectTier !== "auto" || current === "low") return current;
+  // 没有 GPU 时档位已经被钉在 mid，`runtimeDowngrade` 再涨也不会改变结果。
+  // 这里挡住是为了别让看门狗以为自己降成功了，下一轮又接着降。
+  if (!get(activeGpuAcceleration)) return current;
   runtimeDowngrade.update((n) => n + 1);
   return get(deviceTier);
 }
@@ -72,16 +109,11 @@ export function applyRuntimeDowngrade(): VisualTier {
 export const windowMinimized = writable<boolean>(false);
 
 /**
- * 本次启动**实际**生效的 GPU 加速状态，取自 Rust 侧落盘的开关文件。
- *
- * 之所以不直接用 `$settings.enableGpuAcceleration`：那是"下一次启动想要的值"，
- * 用户刚拨动开关时两者就不一致了。分开存才能诚实地告诉用户"要重启才生效"，
- * 而不是拨完就装作已经生效。
- */
-export const activeGpuAcceleration = writable<boolean>(false);
-
-/**
  * 读回本次启动生效的 GPU 开关，然后把设置里的值回写一遍。
+ *
+ * 读回是兜底：正常情况下注入的 `__AURA_GPU_ACTIVE__` 已经给出同一个值（见
+ * `activeGpuAcceleration`），这里再问一次只为覆盖注入失败的场景，`get_gpu_acceleration`
+ * 返回的是同一个启动快照，两者不会打架。
  *
  * 回写是自愈：开关文件可能因为升级、清理用户目录而消失，而 WebView2 的
  * `--disable-gpu` 参数只认这个文件，不回写的话用户开过的 GPU 会凭空关掉。

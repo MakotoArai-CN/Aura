@@ -375,8 +375,11 @@
 
   /* ─── 设备分级视觉变量（App.svelte 挂载时按有效档位写入 data-visual）───
      ultra — 仅手动可选：在 high 之上再加折射与模糊强度，自动检测永远不会选它。
-     high  — 高性能 CPU + 独显：GPU 加速，视觉效果与 GitHub 原版完全一致。
-     mid   — 高性能 CPU 无独显：软件渲染，砍掉常驻模糊合成，交互动效全部保留。
+     high  — 高性能 CPU + 独显 + GPU 加速开着：视觉效果与 GitHub 原版完全一致。
+     mid   — 砍掉常驻模糊合成，交互动效全部保留。自动档落到这里有两种原因：
+             高性能 CPU 但没有独显，或者**本次启动没开 GPU 加速**（那是默认状态）。
+             后者尤其要降：模糊和 backdrop-filter 的 url() 位移滤镜全在 CPU 上每帧
+             重跑，留着比降档难受得多。判定见 stores/device.ts 的 deviceTier。
      low   — 中低端设备：纯色 UI，模糊、透明合成与图层提升全部关闭。
      :root 下的默认值即 mid 档，也是检测失败时最安全的回退。 */
   --visual-backdrop: none;
