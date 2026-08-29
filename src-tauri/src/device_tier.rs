@@ -99,9 +99,16 @@ impl GpuMode {
 /// 缺失、空文件、内容非法一律按 `Auto`。
 ///
 /// 这条默认值语义是从"一律按关"翻过来的。原来的理由是"不能让一个写坏的文件把 GPU
-/// 悄悄打开"，那时默认就是关；现在默认是自动，读不出来就该交给硬件检测。安全性质
-/// 并没有丢：`detect()` 在任何读不到硬件信息的情况下都落到 `Low`，而 `Low` 在自动
-/// 模式下不开 GPU——也就是说"什么都测不出来"依然等于"不开 GPU"。
+/// 悄悄打开"，那时默认就是关；现在默认是自动，读不出来就该交给硬件检测。
+///
+/// 在**Windows**上安全性质没有丢：`detect()` 读不到内存、读不到 CPU 列表、注册表打不开
+/// 时都落到 `Low` 或 `Mid`，而 auto 模式只有 `High` 才开 GPU——"什么都测不出来"依然等于
+/// "不开 GPU"。而 `--disable-gpu` 整段本来就在 `#[cfg(windows)]` 里，所以这个结论覆盖了
+/// 唯一真正消费这个值的平台。
+///
+/// 别把这句读成"所有平台上读不到硬件都落 Low"：非 Windows 桌面的 `has_discrete_gpu()`
+/// 是 fail-open（读不到 `/sys/class/drm` 就当作有独显），那条路上"测不出来"会偏向 High。
+/// 等 macOS / Linux 真的开始消费这个开关时，得先把那个判定改成 fail-closed。
 fn parse_gpu_mode(raw: &str) -> GpuMode {
     match raw.trim().to_ascii_lowercase().as_str() {
         "on" | "true" | "1" | "yes" => GpuMode::On,

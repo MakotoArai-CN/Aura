@@ -90,8 +90,11 @@ export const deviceTier = derived(
   ([$detected, $downgrade, $settings, $gpuActive]): VisualTier => {
     const manual = $settings.effectTier;
     if (manual !== "auto") return manual;
-    const auto = stepDown($detected, $downgrade);
-    return $gpuActive ? auto : worseOf(auto, "mid");
+    // 先把"没有 GPU"这个封顶压在**基准档**上，再让看门狗从那里往下降。
+    // 反过来（先降档、最后封顶）会白吃一轮降档：high 机器降一档到 mid，封顶后还是
+    // mid，看门狗以为自己降成功了，得再等一轮冷静期才真的动到 low。
+    const base = $gpuActive ? $detected : worseOf($detected, "mid");
+    return stepDown(base, $downgrade);
   },
 );
 

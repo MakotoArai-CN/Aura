@@ -181,8 +181,13 @@ function loadSettings(): AppSettings {
       // "用户明确关过"和"从没碰过这一项"。而现在的默认是自动，把从没碰过的人钉死在
       // 关闭上，等于让他们继续用 CPU 做合成——那正是这次要修的问题。真的想关的人
       // 重新点一次即可，代价远小于反过来。
+      //
+      // 判据必须看 `parsed` 而不是 `next`：上面 `{ ...defaults, ...parsed }` 已经把
+      // 缺这一项的旧档填成了默认值 "auto"，拿 `next` 判断的话守卫恒为假，整段迁移
+      // 是死代码，明确开过 GPU 的老用户会被冲成 auto。
       const legacyGpuFlag = (parsed as { enableGpuAcceleration?: unknown }).enableGpuAcceleration;
-      if (!["auto", "on", "off"].includes(next.gpuAcceleration)) {
+      const storedGpuMode = (parsed as { gpuAcceleration?: unknown }).gpuAcceleration;
+      if (!["auto", "on", "off"].includes(storedGpuMode as string)) {
         next.gpuAcceleration = legacyGpuFlag === true ? "on" : "auto";
       }
       delete (next as AppSettings & { enableGpuAcceleration?: unknown }).enableGpuAcceleration;
