@@ -7,8 +7,10 @@
   type VariantKind = "translation" | "phonetic";
 
   // 浮窗为被动视图：歌词 + 设置由主窗推送。
-  // 锁定不使用 set_ignore_cursor_events（Tauri 无 forward，一旦穿透就无法点解锁）；
-  // 改用透明像素穿透 + 锁定时常显工具栏。
+  // 锁定时由 Rust 侧 set_ignore_cursor_events(true) 真正穿透鼠标事件（见 window.rs 的
+  // apply_float_ignore_from_settings）。这里的 pointer-events / 透明像素保留着当兜底：
+  // 穿透生效前的那一帧、以及 ignore 调用失败时，至少歌词区域仍然不吃点击。
+  // 注意穿透之后浮窗自己收不到任何鼠标事件，解锁只能走主窗设置里的那个开关。
   let lyric = $state("等待歌词");
   let tlyric = $state("");
   let variantKind = $state<VariantKind>("translation");

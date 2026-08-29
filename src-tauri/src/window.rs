@@ -17,6 +17,8 @@ pub struct FloatingLyricSettingsState {
 struct FloatingLyricSettingsSnapshot {
     enabled: bool,
     hide_when_main_visible: bool,
+    /// 锁定状态。锁上之后鼠标事件要穿透到底下的窗口去。
+    locked: bool,
 }
 
 impl Default for FloatingLyricSettingsSnapshot {
@@ -24,6 +26,7 @@ impl Default for FloatingLyricSettingsSnapshot {
         Self {
             enabled: false,
             hide_when_main_visible: true,
+            locked: false,
         }
     }
 }
@@ -40,10 +43,16 @@ fn floating_settings_snapshot(payload: &str) -> FloatingLyricSettingsSnapshot {
         .get("hideLyricFloatingWindowWhenMainVisible")
         .and_then(|value| value.as_bool())
         .unwrap_or(true);
+    let locked = value
+        .get("lyricWindow")
+        .and_then(|window| window.get("locked"))
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false);
 
     FloatingLyricSettingsSnapshot {
         enabled,
         hide_when_main_visible,
+        locked,
     }
 }
 
@@ -70,17 +79,31 @@ pub fn remember_float_position(app: &AppHandle) {
     }
 }
 
-/// 浮窗始终接收鼠标事件（ignore=false）。
-/// 锁定穿透由前端用透明像素 + pointer-events 实现：
-/// Tauri 没有 Electron 的 setIgnoreMouseEvents({ forward: true })，
-/// 一旦 set_ignore_cursor_events(true) 就无法 hover/点击解锁。
+/// 锁定时让鼠标事件穿透到底下的窗口去。
+///
+/// 原来这里是无条件 `ignore=false`，理由是 Tauri 没有 Electron 那个
+/// `setIgnoreMouseEvents({ forward: true })`——一旦穿透，浮窗自己就再也收不到 hover，
+/// 没法点回来解锁。但锁定状态下工具栏本来就是整体隐藏的（见 FloatingLyric.svelte 的
+/// `toolbarVisible = !locked && showToolbar`），窗口上没有任何可交互的东西，不穿透
+/// 纯粹是白挡着底下的窗口。解锁的出口在主窗设置里（设置 → 桌面歌词 → 锁定），
+/// 不依赖点浮窗本身，所以这里可以放心穿透。
+///
+/// Windows 上 `set_ignore_cursor_events` 会顺手清掉 `WS_EX_TOPMOST`，所以之后必须
+/// 重新置顶，否则锁定一次浮窗就沉到别的窗口后面去了。
 #[cfg(desktop)]
 fn apply_float_ignore_from_settings(
     app: &AppHandle,
-    _state: &tauri::State<'_, FloatingLyricSettingsState>,
+    state: &tauri::State<'_, FloatingLyricSettingsState>,
 ) {
+    let locked = state
+        .payload
+        .lock()
+        .ok()
+        .and_then(|payload| payload.clone())
+        .map(|payload| floating_settings_snapshot(&payload).locked)
+        .unwrap_or(false);
     if let Some(float) = app.get_webview_window("float") {
-        let _ = float.set_ignore_cursor_events(false);
+        let _ = float.set_ignore_cursor_events(locked);
         let _ = float.set_always_on_top(true);
     }
 }
