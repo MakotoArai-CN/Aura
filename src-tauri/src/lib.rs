@@ -28,12 +28,20 @@ pub fn run() {
     #[cfg(debug_assertions)]
     eprintln!("[aura] device_tier={:?}", device_tier::detect());
 
+    // 本次启动生效的 GPU 决策在这里定格（函数内部 OnceLock 只读一次盘）。必须早于
+    // 前端挂载：`device.ts` 的 `initGpuAcceleration` 会把"下一次启动想要的值"写回
+    // 同一个文件，那之后读盘拿到的就是待生效值，设置页的「重启后生效」会说谎。
+    // 下划线前缀：非 Windows 的 release 构建里没有消费方。
+    let _gpu_active = device_tier::should_enable_gpu_acceleration();
+    #[cfg(debug_assertions)]
+    eprintln!("[aura] gpu_acceleration={_gpu_active}");
+
     #[cfg(windows)]
     {
         let mut args = String::from(
             "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess",
         );
-        if !device_tier::should_enable_gpu_acceleration() {
+        if !_gpu_active {
             args.push_str(" --disable-gpu --disable-gpu-compositing");
         }
         std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args);
@@ -113,23 +121,12 @@ pub fn run() {
                 // 处理（含任务栏）最小化/还原：自定义标题栏按钮走 window_minimize 命令，
                 // 但从任务栏最小化会绕过它，且 WebView 的 visibilitychange 在最小化时不可靠，
                 // 故在此根据 is_minimized 同步浮窗显隐，确保主界面消失后桌面歌词能弹出。
+                // 通知前端「看不见了」也在 sync_float_visibility_for_main 里一并做掉。
                 #[cfg(desktop)]
                 tauri::WindowEvent::Resized(_) => {
                     if window.label() == "main" {
                         let minimized = window.is_minimized().unwrap_or(false);
                         crate::window::sync_float_visibility_for_main(&window.app_handle(), !minimized);
-                        // 顺手告诉前端「现在没人看得见你」，让它停掉持续动画和效果看门狗。
-                        //
-                        // Resized 拖一下窗口就来几十条，所以只在最小化状态真的翻转时才发；
-                        // 否则前端每帧收一条事件，省下的绘制还不够处理事件的开销。
-                        static MAIN_MINIMIZED: std::sync::atomic::AtomicBool =
-                            std::sync::atomic::AtomicBool::new(false);
-                        if MAIN_MINIMIZED.swap(minimized, std::sync::atomic::Ordering::Relaxed)
-                            != minimized
-                        {
-                            use tauri::Emitter;
-                            let _ = window.emit("main-minimized", minimized);
-                        }
                     }
                 }
                 _ => {}

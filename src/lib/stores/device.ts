@@ -56,11 +56,15 @@ export function applyRuntimeDowngrade(): VisualTier {
 }
 
 /**
- * 主窗口是否处于最小化。由 Rust 的 `WindowEvent::Resized` 推过来。
+ * 主窗口是否**不可见**。由 Rust 的 `main-minimized` 事件推过来。
+ *
+ * 名字里的 minimized 是历史包袱，实际语义是"没人看得见"：最小化、关闭到托盘
+ * （`hide()`，此时 `is_minimized()` 仍是 false）都算。WebView2 在无边框透明窗口上
+ * 不做遮挡检测，隐藏的窗口背后动画照旧合成，所以两种情况要一视同仁。
  *
  * 不用 `document.visibilityState`：WebView2 在窗口最小化时不保证把页面标成 hidden，
- * 从任务栏最小化也绕过自定义标题栏的那个按钮。Rust 侧的 `is_minimized()` 是唯一
- * 靠得住的信号，Rust 只在状态真的翻转时才发事件，所以这里不会被拖动窗口刷爆。
+ * 从任务栏最小化也绕过自定义标题栏的那个按钮。Rust 侧才有唯一靠得住的信号，
+ * 且只在状态真的翻转时才发事件，所以这里不会被拖动窗口刷爆。
  *
  * 消费方的原则是"看不见就别干活"：暂停持续动画、跳过 CPU 采样。**不包括**播放本身
  * 和进度计时——最小化听歌是最正常的用法。

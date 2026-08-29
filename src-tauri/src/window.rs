@@ -115,8 +115,36 @@ fn apply_float_ignore_from_settings(
 ) {
 }
 
+/// 主窗口"看不见了"的去重状态。false = 前端当前认为自己可见。
+#[cfg(desktop)]
+static MAIN_HIDDEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// main 的 WebView 重建之后调用（进出一次轻量模式就是一次重建）。
+///
+/// 新页面里 `windowMinimized` store 的初值是 false，如果这里不拨回同一个起点，
+/// 下一次真的隐藏会被 `swap` 判成"状态没变"而不发事件，前端就永远停不下动画。
+#[cfg(desktop)]
+pub fn reset_main_visibility_state() {
+    MAIN_HIDDEN.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// 主窗口可见性的唯一汇聚点：同步桌面歌词显隐，并告诉前端「现在没人看得见你」，
+/// 让它停掉持续动画和效果看门狗。
+///
+/// 判据是"看不见"而不只是"最小化"：关闭到托盘走的是 `hide()`，那一刻
+/// `is_minimized()` 仍然是 false，但 WebView2 在无边框透明窗口上不做遮挡检测，
+/// 隐藏 HWND 背后的动画照旧合成——正是最小化那套优化要消灭的同一份浪费。
+/// 事件名沿用 `main-minimized`（前端 store 叫 windowMinimized），语义按"不可见"读。
+///
+/// 状态真的翻转时才发：`Resized` 拖一下窗口就来几十条，每帧一条事件的开销比省下的
+/// 绘制还大。
 #[cfg(desktop)]
 pub fn sync_float_visibility_for_main(app: &AppHandle, main_visible: bool) {
+    let hidden = !main_visible;
+    if MAIN_HIDDEN.swap(hidden, std::sync::atomic::Ordering::Relaxed) != hidden {
+        let _ = app.emit_to("main", "main-minimized", hidden);
+    }
+
     let settings_state = app.state::<FloatingLyricSettingsState>();
     let settings = settings_state
         .payload

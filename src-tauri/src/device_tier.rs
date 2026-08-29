@@ -96,13 +96,26 @@ pub fn set_gpu_acceleration(enabled: bool) -> Result<(), String> {
     std::fs::write(&path, value).map_err(|err| err.to_string())
 }
 
-/// 当前落盘的 GPU 开关值，供前端回显。
+/// **本次启动实际生效**的 GPU 开关值，供设置页回显「重启后生效」那句提示。
+///
+/// 刻意不重新读盘：前端一挂载就会把"下一次启动想要的值"写回同一个文件
+/// （`device.ts` 的 `initGpuAcceleration`，先读后写是那边的自愈逻辑），此后盘上
+/// 的内容就是待生效值而不是生效值了。再读盘会让第二次挂载起把待生效值当成已生效，
+/// 提示直接从「重启后生效」翻成「本次启动已交给 GPU 合成」——而中间并没有重启。
+/// 第二次挂载不是罕见路径：进出一次轻量模式就会销毁并重建主 WebView。
 #[tauri::command]
 pub fn get_gpu_acceleration() -> bool {
     should_enable_gpu_acceleration()
 }
 
 /// 供 WebView2 启动参数决策：**只看这个开关，默认关闭**。
+///
+/// 值在进程内只读一次就定格（`OnceLock`）。这不是性能优化，是正确性要求：WebView2
+/// 的 `--disable-gpu` 只在首个 WebView 创建前生效，所以"本次启动到底有没有 GPU"是
+/// 启动那一刻就固定下来的事实。而盘上的文件会被前端改（用户拨开关、以及挂载时的
+/// 回写自愈），若每次都读盘，同一次运行里这个函数会前后给出不同答案。第一个调用点
+/// 在 `lib.rs` 设置 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 的地方，早于任何写入，
+/// 因此定格下来的就是真正生效的那个值。
 ///
 /// 这里刻意不再参考渲染档位。以前是"仅 High 档开 GPU"，也就是 GPU 跟着视觉档位走；
 /// 用户要的是一个独立开关，而且默认不开 GPU，所以现在开关是唯一输入，档位对 GPU
@@ -112,9 +125,12 @@ pub fn get_gpu_acceleration() -> bool {
 /// （`973095c` 已 revert）。那条路是自动推断——一次偶发卡顿就能把 GPU 永久关掉，
 /// 而 GPU 一关软件渲染更慢、看门狗又更容易降档，自我强化。显式开关不会有这个问题。
 pub fn should_enable_gpu_acceleration() -> bool {
-    std::fs::read_to_string(gpu_path())
-        .map(|raw| parse_gpu_flag(&raw))
-        .unwrap_or(false)
+    static ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ACTIVE.get_or_init(|| {
+        std::fs::read_to_string(gpu_path())
+            .map(|raw| parse_gpu_flag(&raw))
+            .unwrap_or(false)
+    })
 }
 
 #[tauri::command]

@@ -230,6 +230,10 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
 fn restore_main_window(app: &tauri::AppHandle) -> Result<(), String> {
     use tauri::Manager;
 
+    // 无论是复用还是重建，接下来 main 都是可见的。去重状态必须跟着拨回起点，
+    // 否则"隐藏→通知前端"的翻转判定会以为状态没变（重建出来的页面初值是可见）。
+    crate::window::reset_main_visibility_state();
+
     if let Some(existing) = app.get_webview_window("main") {
         let _ = existing.show();
         let _ = existing.unminimize();
