@@ -69,16 +69,41 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP,
 };
 
-use super::lyrics::{self, LyricLine};
+use super::shared::layout::Rect;
+use super::shared::lyrics::LyricTrack;
+use super::shared::state::{Action, Playback};
+use super::shared::{fmt_time, Drag, Fallback, Icon, Layout, PaintKey, LOGICAL_HEIGHT, LOGICAL_WIDTH};
 use super::snapshot::{self, MiniSnapshot};
 use super::LiteAction;
 
-/// 逻辑尺寸。窗口不可缩放，所有布局都按这套坐标写死，再按 DPI 整体缩放。
-const LOGICAL_WIDTH: f32 = 420.0;
-const LOGICAL_HEIGHT: f32 = 620.0;
-
 const TIMER_ID: usize = 1;
 const TIMER_MS: u32 = 100;
+
+/// 直接造一个 Direct2D 矩形。绘制代码里到处是临时矩形，几何计算另在
+/// `shared::layout`，两者不冲突：那边算坐标，这边只是画之前包一层。
+fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left,
+        top,
+        right,
+        bottom,
+    }
+}
+
+/// 把平台中立的矩形翻译成 Direct2D 的。
+fn d2d(area: Rect) -> D2D_RECT_F {
+    rect(area.left, area.top, area.right, area.bottom)
+}
+
+/// 用圆角矩形画圆。`D2D1_ELLIPSE` 的圆心字段是 `windows_numerics::Vector2`，
+/// 那个类型不在 `windows` crate 的公开路径上，为了几个圆点多拉一个依赖不值当。
+fn circle(cx: f32, cy: f32, radius: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT {
+        rect: rect(cx - radius, cy - radius, cx + radius, cy + radius),
+        radiusX: radius,
+        radiusY: radius,
+    }
+}
 
 /// 自定义消息：请求回到完整模式。按钮和 Esc 都发它，处理逻辑只有一份。
 const WM_RETURN_TO_FULL: u32 = WM_APP + 1;
@@ -218,127 +243,6 @@ where
 
     rx.recv()
         .unwrap_or_else(|_| Err("轻量模式窗口线程没有回报状态".to_string()))
-}
-
-fn rect(left: f32, top: f32, right: f32, bottom: f32) -> D2D_RECT_F {
-    D2D_RECT_F {
-        left,
-        top,
-        right,
-        bottom,
-    }
-}
-
-fn contains(area: &D2D_RECT_F, x: f32, y: f32) -> bool {
-    x >= area.left && x < area.right && y >= area.top && y < area.bottom
-}
-
-/// 用圆角矩形画圆。`D2D1_ELLIPSE` 的圆心字段是 `windows_numerics::Vector2`，
-/// 那个类型不在 `windows` crate 的公开路径上，为了几个圆点多拉一个依赖不值当。
-fn circle(cx: f32, cy: f32, radius: f32) -> D2D1_ROUNDED_RECT {
-    D2D1_ROUNDED_RECT {
-        rect: rect(cx - radius, cy - radius, cx + radius, cy + radius),
-        radiusX: radius,
-        radiusY: radius,
-    }
-}
-
-/// 一次算好、绘制和命中测试共用的布局。两边读同一份数据，就不可能算出两套坐标。
-#[derive(Clone, Copy, Default)]
-struct Layout {
-    scale: f32,
-    width: f32,
-    height: f32,
-    title_bar: D2D_RECT_F,
-    btn_full: D2D_RECT_F,
-    btn_min: D2D_RECT_F,
-    btn_close: D2D_RECT_F,
-    cover: D2D_RECT_F,
-    title: D2D_RECT_F,
-    subtitle: D2D_RECT_F,
-    progress: D2D_RECT_F,
-    progress_hit: D2D_RECT_F,
-    time_row: D2D_RECT_F,
-    btn_loop: D2D_RECT_F,
-    btn_prev: D2D_RECT_F,
-    btn_play: D2D_RECT_F,
-    btn_next: D2D_RECT_F,
-    volume_icon: D2D_RECT_F,
-    volume_slider: D2D_RECT_F,
-    volume_hit: D2D_RECT_F,
-    lyrics: D2D_RECT_F,
-    queue: D2D_RECT_F,
-    row_height: f32,
-}
-
-impl Layout {
-    fn compute(scale: f32) -> Self {
-        let s = |value: f32| value * scale;
-        Self {
-            scale,
-            width: s(LOGICAL_WIDTH),
-            height: s(LOGICAL_HEIGHT),
-            title_bar: rect(0.0, 0.0, s(420.0), s(36.0)),
-            btn_full: rect(s(312.0), s(4.0), s(340.0), s(32.0)),
-            btn_min: rect(s(348.0), s(4.0), s(376.0), s(32.0)),
-            btn_close: rect(s(384.0), s(4.0), s(412.0), s(32.0)),
-            cover: rect(s(120.0), s(48.0), s(300.0), s(228.0)),
-            title: rect(s(24.0), s(240.0), s(396.0), s(264.0)),
-            subtitle: rect(s(24.0), s(266.0), s(396.0), s(286.0)),
-            progress: rect(s(24.0), s(304.0), s(396.0), s(308.0)),
-            progress_hit: rect(s(24.0), s(296.0), s(396.0), s(316.0)),
-            time_row: rect(s(24.0), s(314.0), s(396.0), s(330.0)),
-            btn_loop: rect(s(24.0), s(340.0), s(48.0), s(364.0)),
-            btn_prev: rect(s(136.0), s(336.0), s(168.0), s(368.0)),
-            btn_play: rect(s(188.0), s(330.0), s(232.0), s(374.0)),
-            btn_next: rect(s(252.0), s(336.0), s(284.0), s(368.0)),
-            volume_icon: rect(s(312.0), s(343.0), s(330.0), s(361.0)),
-            volume_slider: rect(s(336.0), s(350.0), s(396.0), s(354.0)),
-            volume_hit: rect(s(330.0), s(342.0), s(400.0), s(362.0)),
-            lyrics: rect(s(24.0), s(390.0), s(396.0), s(510.0)),
-            queue: rect(s(12.0), s(520.0), s(408.0), s(612.0)),
-            row_height: s(26.0),
-        }
-    }
-}
-
-/// 需要画的图标。有图标字体就用字形，没有就退回几何图形——宁可简陋也不要豆腐块。
-#[derive(Clone, Copy, PartialEq)]
-enum Icon {
-    Prev,
-    Next,
-    Play,
-    Pause,
-    Minimize,
-    Close,
-    FullMode,
-    LoopSequence,
-    LoopOne,
-    Shuffle,
-    Volume,
-    Muted,
-    Note,
-}
-
-impl Icon {
-    /// Segoe Fluent Icons / Segoe MDL2 Assets 里的私有区码位，两套字体这些码位一致。
-    fn glyph(self) -> char {
-        match self {
-            Icon::Prev => '\u{E100}',
-            Icon::Next => '\u{E101}',
-            Icon::Play => '\u{E102}',
-            Icon::Pause => '\u{E103}',
-            Icon::Minimize => '\u{E921}',
-            Icon::Close => '\u{E8BB}',
-            Icon::FullMode => '\u{E740}',
-            Icon::LoopSequence => '\u{E1CD}',
-            Icon::LoopOne => '\u{E1CC}',
-            Icon::Shuffle => '\u{E14B}',
-            Icon::Volume => '\u{E767}',
-            Icon::Muted => '\u{E74F}',
-            Icon::Note => '\u{E8D6}',
-        }
-    }
 }
 
 struct Brushes {
@@ -485,37 +389,12 @@ impl Formats {
     }
 }
 
-/// 鼠标正在拖什么。窗口本身的拖动交给 `WM_NCHITTEST` 返回 `HTCAPTION`，
-/// 那样能白拿系统的贴边和动画，不用自己算偏移。
-#[derive(Clone, Copy, PartialEq)]
-enum Drag {
-    None,
-    Progress,
-    Volume,
-}
-
-/// 决定"这一帧和上一帧比有没有变化"。只有它变了才 `InvalidateRect`——
-/// 轻量模式要是无条件每秒重画十次，那就白轻量了。
-#[derive(Clone, Copy, PartialEq, Default)]
-struct PaintKey {
-    quarter: i64,
-    duration: i64,
-    playing: bool,
-    busy: bool,
-    index: i64,
-    lyric: i64,
-    volume: i64,
-    muted: bool,
-    loop_mode: u8,
-    scroll: i32,
-    sliding: bool,
-    notice: bool,
-}
-
 struct Ui {
     hwnd: HWND,
     engine: super::audio::Engine,
-    snapshot: MiniSnapshot,
+    /// 与平台无关的播放状态机。换曲、循环、洗牌、失败退避都在它里面，
+    /// 这里只负责把它返回的 `Action` 兑现成对 `engine` 的调用。
+    playback: Playback,
     on_return: Box<dyn Fn(MiniSnapshot)>,
 
     d2d: ID2D1Factory,
@@ -526,27 +405,15 @@ struct Ui {
     formats: Option<Formats>,
 
     layout: Layout,
-    lyrics: Vec<LyricLine>,
-    lyrics_for: i64,
+    /// 歌词轨与它的滚动状态，同样是平台无关的。
+    lyrics: LyricTrack,
     cover: Option<ID2D1Bitmap>,
     cover_key: Option<String>,
 
     drag: Drag,
-    /// 拖动进度条时先本地预览这个位置，松手才真的 seek，免得一路拖一路重新缓冲。
-    scrub: Option<f64>,
     queue_scroll: f32,
-    /// 换行时的滑动偏移，每帧向 0 收敛，让歌词是滑过去而不是跳过去。
-    lyric_shift: f32,
-    active_line: i64,
 
-    /// 恢复进度：刚 load 完源还在打开中，这时 seek 会被丢掉，得等它开好。
-    pending_seek: Option<(f64, u32)>,
-    /// 连续失败计数。连挂 3 首以上就停下来，不再无脑往后跳。
-    failures: u32,
-    notice: Option<&'static str>,
     last_paint: PaintKey,
-    /// 随机播放用的 xorshift 种子。为一个洗牌引一个 rand 依赖不值得。
-    rng: u64,
 }
 
 static CLASS_NAME: std::sync::OnceLock<Vec<u16>> = std::sync::OnceLock::new();
@@ -573,10 +440,10 @@ unsafe fn register_class() -> windows::core::Result<PCWSTR> {
 
 impl Ui {
     unsafe fn create(
-        mut snapshot: MiniSnapshot,
+        snapshot: MiniSnapshot,
         on_return: Box<dyn Fn(MiniSnapshot)>,
     ) -> Result<Box<Self>, String> {
-        snapshot.normalize();
+        // 快照的规范化由 Playback::new 负责，这里不必再来一遍。
         let class = register_class().map_err(|err| format!("注册窗口类失败: {err}"))?;
 
         // 先按 96 DPI 摆一个位置，窗口出来后再按真实 DPI 重算尺寸。
@@ -639,7 +506,7 @@ impl Ui {
         let mut ui = Box::new(Self {
             hwnd,
             engine,
-            snapshot,
+            playback: Playback::new(snapshot, seed),
             on_return,
             d2d,
             dwrite,
@@ -648,20 +515,12 @@ impl Ui {
             brushes: None,
             formats: None,
             layout: Layout::compute(scale),
-            lyrics: Vec::new(),
-            lyrics_for: -1,
+            lyrics: LyricTrack::new(),
             cover: None,
             cover_key: None,
             drag: Drag::None,
-            scrub: None,
             queue_scroll: 0.0,
-            lyric_shift: 0.0,
-            active_line: -1,
-            pending_seek: None,
-            failures: 0,
-            notice: None,
             last_paint: PaintKey::default(),
-            rng: seed,
         });
 
         // wndproc 通过 GWLP_USERDATA 找回这个对象。Box 的地址在移动 Box 时不变，
@@ -780,275 +639,197 @@ impl Ui {
         }
     }
 
-    /// 开始播放当前曲目。`resume` 表示这是刚从完整模式接管，要把进度接回去。
-    unsafe fn begin_current(&mut self, resume: bool) {
-        let _ = self.engine.set_volume(self.snapshot.volume);
-        let _ = self.engine.set_muted(self.snapshot.muted);
-        self.lyrics_for = -1;
-        self.scrub = None;
-        self.lyric_shift = 0.0;
-        self.active_line = -1;
-        self.pending_seek = None;
-
-        let Some(track) = self.snapshot.current().cloned() else {
-            self.notice = Some("播放列表是空的，回到完整模式选歌");
-            return;
-        };
-        let Some(uri) = super::playable_uri(&track) else {
-            self.on_track_failed();
-            return;
-        };
-        if self.engine.load(&uri).is_err() {
-            self.on_track_failed();
-            return;
+    /// 把状态机给出的动作兑现成对 `engine` 的调用。
+    ///
+    /// 装载失败会让状态机再吐出一批动作（往后跳，或者停手），所以这里用工作队列而不是
+    /// 直接递归。失败计数已经把深度限制在三以内，但队列写法更不容易踩到栈上去。
+    unsafe fn apply(&mut self, actions: Vec<Action>) {
+        let mut queue: std::collections::VecDeque<Action> = actions.into();
+        while let Some(action) = queue.pop_front() {
+            match action {
+                Action::SetVolume(volume) => {
+                    let _ = self.engine.set_volume(volume);
+                }
+                Action::SetMuted(muted) => {
+                    let _ = self.engine.set_muted(muted);
+                }
+                Action::Play => {
+                    let _ = self.engine.play();
+                }
+                Action::Pause => {
+                    let _ = self.engine.pause();
+                }
+                Action::Seek(target) => {
+                    let _ = self.engine.seek(target);
+                }
+                Action::Halt(_) => {
+                    // 提示文案已经记在状态机里。停手就意味着后面排着的动作都作废。
+                    queue.clear();
+                }
+                Action::Load { index } => {
+                    self.lyrics.reset();
+                    // 地址解析要查磁盘缓存，所以留在这一侧做，状态机不碰文件系统。
+                    let uri = self
+                        .playback
+                        .snapshot()
+                        .tracks
+                        .get(index.max(0) as usize)
+                        .and_then(super::playable_uri);
+                    let loaded = match uri {
+                        Some(uri) => self.engine.load(&uri).is_ok(),
+                        None => false,
+                    };
+                    if loaded {
+                        self.playback.on_load_ok();
+                    } else {
+                        // 这一首废了，后面排着的 Play 也就没有意义了。
+                        queue.clear();
+                        queue.extend(self.playback.on_load_failed());
+                    }
+                }
+            }
         }
-        // 恢复进度不能马上 seek：源还在打开中，这时候的 seek 会被丢掉。
-        if resume && self.snapshot.position > 0.5 {
-            self.pending_seek = Some((self.snapshot.position, 0));
-        }
-        let _ = self.engine.play();
-        self.notice = None;
     }
 
-    /// 一首打不开就往后跳。连挂三首就停手——这种情况基本是签名直链集体过期，
-    /// 再往后跳也是同样的结果，不如告诉用户回完整模式重新解析。
-    unsafe fn on_track_failed(&mut self) {
-        self.failures += 1;
-        if self.failures >= 3 || self.snapshot.tracks.len() <= 1 {
-            let _ = self.engine.pause();
-            self.notice = Some("无可播放的曲目，回到完整模式重新解析");
-            return;
-        }
-        self.step(1, false);
+    /// 开始播放当前曲目。`resume` 表示这是刚从完整模式接管，要把进度接回去。
+    unsafe fn begin_current(&mut self, resume: bool) {
+        let actions = self.playback.begin_current(resume);
+        self.apply(actions);
     }
 
     /// 换曲。`user` 为真表示这是用户点的，会清掉失败计数，也不走随机。
     unsafe fn step(&mut self, delta: i64, user: bool) {
-        let count = self.snapshot.tracks.len() as i64;
-        if count == 0 {
+        let actions = self.playback.step(delta, user);
+        if actions.is_empty() {
             return;
         }
-        if user {
-            self.failures = 0;
-        }
-        self.snapshot.index = if self.snapshot.loop_mode == 2 && !user && delta > 0 {
-            self.random_index(count)
-        } else {
-            (self.snapshot.index + delta).rem_euclid(count)
-        };
-        self.snapshot.position = 0.0;
+        // 换曲之后队列滚回顶部，不然新的当前曲目可能在可视区外。
         self.queue_scroll = 0.0;
-        self.begin_current(false);
+        self.apply(actions);
     }
 
-    /// xorshift64。为一个洗牌拉一个 rand 依赖不值当。
-    fn random_index(&mut self, count: i64) -> i64 {
-        if count <= 1 {
-            return 0;
+    unsafe fn jump_to(&mut self, index: i64) {
+        let actions = self.playback.jump_to(index);
+        if actions.is_empty() {
+            return;
         }
-        self.rng ^= self.rng << 13;
-        self.rng ^= self.rng >> 7;
-        self.rng ^= self.rng << 17;
-        let mut pick = (self.rng % count as u64) as i64;
-        // 随机播放至少得换一首，原地重放会被当成卡住了。
-        if pick == self.snapshot.index {
-            pick = (pick + 1) % count;
-        }
-        pick
+        self.apply(actions);
     }
 
     unsafe fn toggle_play(&mut self) {
-        // 上一轮失败停下之后，再点一次播放就当作重试。
-        if self.notice.is_some() {
-            self.failures = 0;
-            self.notice = None;
-            self.begin_current(false);
-            return;
-        }
-        if self.engine.is_playing() {
-            let _ = self.engine.pause();
-        } else {
-            let _ = self.engine.play();
-        }
-    }
-
-    fn ensure_lyrics(&mut self) {
-        if self.lyrics_for == self.snapshot.index {
-            return;
-        }
-        self.lyrics_for = self.snapshot.index;
-        self.lyrics = match self.snapshot.current() {
-            Some(track) => {
-                let main = lyrics::parse(track.lyric.as_deref().unwrap_or(""));
-                match track.tlyric.as_deref() {
-                    Some(raw) if !raw.trim().is_empty() => {
-                        lyrics::merge_translation(main, &lyrics::parse(raw))
-                    }
-                    _ => main,
-                }
-            }
-            None => Vec::new(),
-        };
-        self.active_line = -1;
-    }
-
-    /// 拖动进度条时显示手指的位置而不是引擎的位置，不然拖起来会来回跳。
-    fn display_position(&self) -> f64 {
-        self.scrub.unwrap_or(self.snapshot.position)
+        let actions = self.playback.toggle_play(self.engine.is_playing());
+        self.apply(actions);
     }
 
     fn paint_key(&self) -> PaintKey {
         PaintKey {
-            quarter: (self.display_position() * 4.0) as i64,
-            duration: (self.engine.duration() * 4.0) as i64,
+            quarter: PaintKey::quantize_seconds(self.playback.display_position()),
+            duration: PaintKey::quantize_seconds(self.engine.duration()),
             playing: self.engine.is_playing(),
             busy: self.engine.is_busy(),
-            index: self.snapshot.index,
-            lyric: self.active_line,
-            volume: (self.snapshot.volume * 100.0) as i64,
-            muted: self.snapshot.muted,
-            loop_mode: self.snapshot.loop_mode,
+            index: self.playback.index(),
+            lyric: self.lyrics.active(),
+            volume: PaintKey::quantize_volume(self.playback.volume()),
+            muted: self.playback.muted(),
+            loop_mode: self.playback.loop_mode(),
             scroll: self.queue_scroll.round() as i32,
-            sliding: self.lyric_shift != 0.0,
-            notice: self.notice.is_some(),
+            sliding: self.lyrics.is_sliding(),
+            notice: self.playback.notice().is_some(),
         }
     }
 
     unsafe fn on_tick(&mut self) {
+        // 自动换曲这两条路（播完下一首、加载失败往后跳）原来都经过 Ui::step，顺带就把
+        // 队列滚回顶部了；抽出 Playback 之后它们直接 apply，滚动位置留在原处——用户停在
+        // 队列中段时自动换曲，当前曲目的高亮会跑到可视区外。
+        //
+        // 判据用「下标是否真的变了」而不是「有没有产生动作」：连挂三首停手那条会返回
+        // Halt 但并不换曲，那种情况原来也不重置。
+        let index_before = self.playback.index();
         if self.engine.take_failed() {
-            self.on_track_failed();
+            let actions = self.playback.on_load_failed();
+            self.apply(actions);
         } else if self.engine.take_ended() {
-            self.failures = 0;
-            if self.snapshot.loop_mode == 1 {
-                let _ = self.engine.seek(0.0);
-                let _ = self.engine.play();
-            } else {
-                self.step(1, false);
-            }
+            let actions = self.playback.on_ended();
+            self.apply(actions);
+        }
+        if self.playback.index() != index_before {
+            self.queue_scroll = 0.0;
         }
 
         // 补上被丢掉的恢复 seek。一秒还没等到源打开就算了，从头播总比不播好。
-        if let Some((target, tries)) = self.pending_seek {
-            if !self.engine.is_busy() && self.engine.duration() > 0.0 {
-                let _ = self.engine.seek(target);
-                self.pending_seek = None;
-            } else if tries >= 10 {
-                self.pending_seek = None;
-            } else {
-                self.pending_seek = Some((target, tries + 1));
-            }
+        if let Some(target) = self
+            .playback
+            .take_pending_seek(self.engine.is_busy(), self.engine.duration())
+        {
+            let _ = self.engine.seek(target);
         }
 
         if self.drag != Drag::Progress {
-            self.snapshot.position = self.engine.position();
+            self.playback.set_position(self.engine.position());
         }
-        self.ensure_lyrics();
 
-        let active = lyrics::active_index(&self.lyrics, self.display_position())
-            .map(|index| index as i64)
-            .unwrap_or(-1);
-        if active != self.active_line {
-            // 从上一行的位置滑过来，而不是直接跳。
-            if self.active_line >= 0 {
-                let delta = (active - self.active_line) as f32;
-                self.lyric_shift = (delta * self.layout.row_height).clamp(-120.0, 120.0);
-            }
-            self.active_line = active;
-        }
-        if self.lyric_shift.abs() > 0.5 {
-            self.lyric_shift *= 0.68;
-        } else {
-            self.lyric_shift = 0.0;
-        }
+        let index = self.playback.index();
+        let (lyric, tlyric) = match self.playback.snapshot().current() {
+            Some(track) => (track.lyric.clone(), track.tlyric.clone()),
+            None => (None, None),
+        };
+        self.lyrics.sync(index, lyric.as_deref(), tlyric.as_deref());
+        self.lyrics
+            .tick(self.playback.display_position(), self.layout.row_height);
 
         let key = self.paint_key();
-        if key != self.last_paint || self.lyric_shift != 0.0 {
+        if key != self.last_paint || self.lyrics.is_sliding() {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
 
-    /// 横向命中位置换成 0~1 的比例。进度条和音量条共用。
-    fn ratio_in(area: &D2D_RECT_F, x: f32) -> f64 {
-        let width = area.right - area.left;
-        if width <= 0.0 {
-            return 0.0;
-        }
-        (((x - area.left) / width) as f64).clamp(0.0, 1.0)
-    }
-
     unsafe fn set_volume_from(&mut self, x: f32) {
-        self.snapshot.volume = Self::ratio_in(&self.layout.volume_slider, x);
-        // 手动拖音量的意思就是"我要听"，顺手解除静音。
-        self.snapshot.muted = false;
-        let _ = self.engine.set_muted(false);
-        let _ = self.engine.set_volume(self.snapshot.volume);
+        let ratio = self.layout.volume_slider.ratio_at(x);
+        let actions = self.playback.set_volume_from_ratio(ratio);
+        self.apply(actions);
     }
 
     unsafe fn adjust_volume(&mut self, delta: f64) {
-        self.snapshot.volume = (self.snapshot.volume + delta).clamp(0.0, 1.0);
-        let _ = self.engine.set_volume(self.snapshot.volume);
-    }
-
-    fn position_from(&self, x: f32) -> f64 {
-        let duration = self.engine.duration();
-        if duration <= 0.0 {
-            return 0.0;
-        }
-        Self::ratio_in(&self.layout.progress, x) * duration
-    }
-
-    /// 队列里点到了第几行。顶部留了一行标题的高度。
-    fn queue_index_at(&self, y: f32) -> Option<i64> {
-        let row = self.layout.row_height;
-        let top = self.layout.queue.top + row;
-        if row <= 0.0 || y < top {
-            return None;
-        }
-        let index = ((y - top + self.queue_scroll) / row).floor() as i64;
-        if index >= 0 && index < self.snapshot.tracks.len() as i64 {
-            Some(index)
-        } else {
-            None
-        }
+        let actions = self.playback.adjust_volume(delta);
+        self.apply(actions);
     }
 
     unsafe fn on_left_down(&mut self, x: f32, y: f32) {
         let layout = self.layout;
         // 关闭和"回到完整模式"走同一条出口：这个窗口一旦没了，整个应用就没界面了，
         // 所以关窗只能是把完整界面拉回来，不是退进程。
-        if contains(&layout.btn_close, x, y) {
+        if layout.btn_close.contains(x, y) {
             let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
-        } else if contains(&layout.btn_full, x, y) {
+        } else if layout.btn_full.contains(x, y) {
             let _ = PostMessageW(Some(self.hwnd), WM_RETURN_TO_FULL, WPARAM(0), LPARAM(0));
-        } else if contains(&layout.btn_min, x, y) {
+        } else if layout.btn_min.contains(x, y) {
             let _ = ShowWindow(self.hwnd, SW_MINIMIZE);
-        } else if contains(&layout.btn_play, x, y) {
+        } else if layout.btn_play.contains(x, y) {
             self.toggle_play();
-        } else if contains(&layout.btn_prev, x, y) {
+        } else if layout.btn_prev.contains(x, y) {
             self.step(-1, true);
-        } else if contains(&layout.btn_next, x, y) {
+        } else if layout.btn_next.contains(x, y) {
             self.step(1, true);
-        } else if contains(&layout.btn_loop, x, y) {
-            self.snapshot.loop_mode = (self.snapshot.loop_mode + 1) % 3;
-        } else if contains(&layout.volume_icon, x, y) {
-            self.snapshot.muted = !self.snapshot.muted;
-            let _ = self.engine.set_muted(self.snapshot.muted);
-        } else if contains(&layout.volume_hit, x, y) {
+        } else if layout.btn_loop.contains(x, y) {
+            self.playback.cycle_loop_mode();
+        } else if layout.volume_icon.contains(x, y) {
+            let actions = self.playback.toggle_muted();
+            self.apply(actions);
+        } else if layout.volume_hit.contains(x, y) {
             self.drag = Drag::Volume;
             SetCapture(self.hwnd);
             self.set_volume_from(x);
-        } else if contains(&layout.progress_hit, x, y) {
+        } else if layout.progress_hit.contains(x, y) {
             // 拖的过程只改本地预览值，松手才真的 seek，免得一路拖一路重新缓冲。
             self.drag = Drag::Progress;
             SetCapture(self.hwnd);
-            self.scrub = Some(self.position_from(x));
-        } else if contains(&layout.queue, x, y) {
-            if let Some(index) = self.queue_index_at(y) {
-                if index != self.snapshot.index {
-                    self.snapshot.index = index;
-                    self.snapshot.position = 0.0;
-                    self.failures = 0;
-                    self.begin_current(false);
+            let target = layout.position_from(x, self.engine.duration());
+            self.playback.set_scrub(Some(target));
+        } else if layout.queue.contains(x, y) {
+            if let Some(index) = layout.queue_index_at(y, self.queue_scroll, self.playback.count()) {
+                if index != self.playback.index() {
+                    self.jump_to(index);
                 }
             }
         } else {
@@ -1059,7 +840,10 @@ impl Ui {
 
     unsafe fn on_mouse_move(&mut self, x: f32) {
         match self.drag {
-            Drag::Progress => self.scrub = Some(self.position_from(x)),
+            Drag::Progress => {
+                let target = self.layout.position_from(x, self.engine.duration());
+                self.playback.set_scrub(Some(target));
+            }
             Drag::Volume => self.set_volume_from(x),
             Drag::None => return,
         }
@@ -1071,9 +855,10 @@ impl Ui {
             return;
         }
         if self.drag == Drag::Progress {
-            if let Some(target) = self.scrub.take() {
+            if let Some(target) = self.playback.scrub() {
+                self.playback.set_scrub(None);
                 let _ = self.engine.seek(target);
-                self.snapshot.position = target;
+                self.playback.set_position(target);
             }
         }
         let _ = ReleaseCapture();
@@ -1083,11 +868,11 @@ impl Ui {
 
     unsafe fn on_wheel(&mut self, delta: i16, x: f32, y: f32) {
         let notches = delta as f32 / 120.0;
-        if contains(&self.layout.queue, x, y) {
+        if self.layout.queue.contains(x, y) {
             let row = self.layout.row_height;
             // 队列可视行数要扣掉顶上那行标题。
-            let visible = (((self.layout.queue.bottom - self.layout.queue.top) / row) - 1.0).max(1.0);
-            let max = (self.snapshot.tracks.len() as f32 - visible).max(0.0) * row;
+            let visible = ((self.layout.queue.height() / row) - 1.0).max(1.0);
+            let max = (self.playback.count() as f32 - visible).max(0.0) * row;
             self.queue_scroll = (self.queue_scroll - notches * row * 2.0).clamp(0.0, max);
         } else {
             // 队列以外滚滚轮当调音量，和大多数播放器的习惯一致。
@@ -1103,7 +888,7 @@ impl Ui {
         }
         let target = (self.engine.position() + delta).clamp(0.0, (duration - 0.5).max(0.0));
         let _ = self.engine.seek(target);
-        self.snapshot.position = target;
+        self.playback.set_position(target);
     }
 
     unsafe fn on_key(&mut self, vk: u16) {
@@ -1139,15 +924,17 @@ impl Ui {
     /// 退出前把状态交回去：快照落盘 + 回调，完整模式接着从这个位置往下播。
     unsafe fn finish(&mut self) {
         if self.engine.duration() > 0.0 {
-            self.snapshot.position = self.engine.position();
+            self.playback.set_position(self.engine.position());
         }
-        self.snapshot.saved_at = std::time::SystemTime::now()
+        let saved_at = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|delta| delta.as_secs() as i64)
             .unwrap_or(0);
+        self.playback.snapshot_mut().saved_at = saved_at;
         let _ = self.engine.pause();
-        let _ = snapshot::save(&self.snapshot);
-        (self.on_return)(self.snapshot.clone());
+        let snapshot = self.playback.snapshot().clone();
+        let _ = snapshot::save(&snapshot);
+        (self.on_return)(snapshot);
     }
 
     unsafe fn text(
@@ -1197,7 +984,8 @@ impl Ui {
     /// 封面换了才重新解码。同一张图不该每帧都过一遍 WIC。
     unsafe fn ensure_cover(&mut self, target: &ID2D1HwndRenderTarget) {
         let path = self
-            .snapshot
+            .playback
+            .snapshot()
             .current()
             .and_then(|track| track.cover_path.clone())
             .unwrap_or_default();
@@ -1298,9 +1086,9 @@ impl Ui {
         let label = rect(16.0 * l.scale, 8.0 * l.scale, l.btn_full.left, 30.0 * l.scale);
         Self::text(target, "Aura 轻量模式", &formats.time, &label, &brushes.line);
         let icons = formats.icon_small.as_ref();
-        Self::draw_icon(target, Icon::FullMode, &l.btn_full, &brushes.dim, icons);
-        Self::draw_icon(target, Icon::Minimize, &l.btn_min, &brushes.dim, icons);
-        Self::draw_icon(target, Icon::Close, &l.btn_close, &brushes.dim, icons);
+        Self::draw_icon(target, Icon::FullMode, &d2d(l.btn_full), &brushes.dim, icons);
+        Self::draw_icon(target, Icon::Minimize, &d2d(l.btn_min), &brushes.dim, icons);
+        Self::draw_icon(target, Icon::Close, &d2d(l.btn_close), &brushes.dim, icons);
     }
 
     unsafe fn draw_cover(
@@ -1313,7 +1101,7 @@ impl Ui {
         let radius = 10.0 * l.scale;
         target.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
-                rect: l.cover,
+                rect: d2d(l.cover),
                 radiusX: radius,
                 radiusY: radius,
             },
@@ -1321,10 +1109,10 @@ impl Ui {
         );
         match self.cover.as_ref() {
             Some(bitmap) => {
-                target.PushAxisAlignedClip(&l.cover, D2D1_ANTIALIAS_MODE_ALIASED);
+                target.PushAxisAlignedClip(&d2d(l.cover), D2D1_ANTIALIAS_MODE_ALIASED);
                 target.DrawBitmap(
                     bitmap,
-                    Some(&l.cover),
+                    Some(&d2d(l.cover)),
                     1.0,
                     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                     None,
@@ -1334,7 +1122,7 @@ impl Ui {
             None => Self::draw_icon(
                 target,
                 Icon::Note,
-                &l.cover,
+                &d2d(l.cover),
                 &brushes.line,
                 formats.icon_large.as_ref(),
             ),
@@ -1348,7 +1136,7 @@ impl Ui {
         formats: &Formats,
     ) {
         let l = &self.layout;
-        let (title, artist, album) = match self.snapshot.current() {
+        let (title, artist, album) = match self.playback.snapshot().current() {
             Some(track) => (
                 track.title.as_str(),
                 track.artist.as_str(),
@@ -1356,15 +1144,15 @@ impl Ui {
             ),
             None => ("没有正在播放的曲目", "", ""),
         };
-        Self::text(target, title, &formats.title, &l.title, &brushes.text);
+        Self::text(target, title, &formats.title, &d2d(l.title), &brushes.text);
 
         // 副标题这一行是复用的：有话要说的时候（失败、缓冲）优先说话。
-        if let Some(notice) = self.notice {
-            Self::text(target, notice, &formats.sub, &l.subtitle, &brushes.accent);
+        if let Some(notice) = self.playback.notice() {
+            Self::text(target, notice, &formats.sub, &d2d(l.subtitle), &brushes.accent);
             return;
         }
         if self.engine.is_busy() {
-            Self::text(target, "缓冲中…", &formats.sub, &l.subtitle, &brushes.dim);
+            Self::text(target, "缓冲中…", &formats.sub, &d2d(l.subtitle), &brushes.dim);
             return;
         }
         let subtitle = if album.is_empty() {
@@ -1372,7 +1160,7 @@ impl Ui {
         } else {
             format!("{artist} · {album}")
         };
-        Self::text(target, &subtitle, &formats.sub, &l.subtitle, &brushes.dim);
+        Self::text(target, &subtitle, &formats.sub, &d2d(l.subtitle), &brushes.dim);
     }
 
     unsafe fn draw_progress(
@@ -1383,7 +1171,7 @@ impl Ui {
     ) {
         let l = &self.layout;
         let duration = self.engine.duration();
-        let position = self.display_position();
+        let position = self.playback.display_position();
         let ratio = if duration > 0.0 {
             (position / duration).clamp(0.0, 1.0) as f32
         } else {
@@ -1396,7 +1184,7 @@ impl Ui {
             radiusX: radius,
             radiusY: radius,
         };
-        target.FillRoundedRectangle(&rounded(bar), &brushes.line);
+        target.FillRoundedRectangle(&rounded(d2d(bar)), &brushes.line);
         let head = bar.left + (bar.right - bar.left) * ratio;
         if ratio > 0.0 {
             target.FillRoundedRectangle(
@@ -1412,7 +1200,7 @@ impl Ui {
             );
         }
         let clock = format!("{} / {}", fmt_time(position), fmt_time(duration));
-        Self::text(target, &clock, &formats.time, &l.time_row, &brushes.dim);
+        Self::text(target, &clock, &formats.time, &d2d(l.time_row), &brushes.dim);
     }
 
     unsafe fn draw_controls(
@@ -1423,16 +1211,16 @@ impl Ui {
     ) {
         let l = &self.layout;
         let small = formats.icon_small.as_ref();
-        let (loop_icon, loop_brush) = match self.snapshot.loop_mode {
+        let (loop_icon, loop_brush) = match self.playback.snapshot().loop_mode {
             1 => (Icon::LoopOne, &brushes.accent),
             2 => (Icon::Shuffle, &brushes.accent),
             _ => (Icon::LoopSequence, &brushes.dim),
         };
-        Self::draw_icon(target, loop_icon, &l.btn_loop, loop_brush, small);
+        Self::draw_icon(target, loop_icon, &d2d(l.btn_loop), loop_brush, small);
         Self::draw_icon(
             target,
             Icon::Prev,
-            &l.btn_prev,
+            &d2d(l.btn_prev),
             &brushes.text,
             formats.icon_medium.as_ref(),
         );
@@ -1455,21 +1243,21 @@ impl Ui {
         Self::draw_icon(
             target,
             play_icon,
-            &play,
+            &d2d(play),
             &brushes.text,
             formats.icon_large.as_ref(),
         );
         Self::draw_icon(
             target,
             Icon::Next,
-            &l.btn_next,
+            &d2d(l.btn_next),
             &brushes.text,
             formats.icon_medium.as_ref(),
         );
 
-        let silent = self.snapshot.muted || self.snapshot.volume <= 0.0;
+        let silent = self.playback.snapshot().muted || self.playback.snapshot().volume <= 0.0;
         let volume_icon = if silent { Icon::Muted } else { Icon::Volume };
-        Self::draw_icon(target, volume_icon, &l.volume_icon, &brushes.dim, small);
+        Self::draw_icon(target, volume_icon, &d2d(l.volume_icon), &brushes.dim, small);
         let slider = l.volume_slider;
         let radius = (slider.bottom - slider.top) / 2.0;
         let rounded = |area: D2D_RECT_F| D2D1_ROUNDED_RECT {
@@ -1477,11 +1265,11 @@ impl Ui {
             radiusX: radius,
             radiusY: radius,
         };
-        target.FillRoundedRectangle(&rounded(slider), &brushes.line);
+        target.FillRoundedRectangle(&rounded(d2d(slider)), &brushes.line);
         let level = if silent {
             0.0
         } else {
-            self.snapshot.volume as f32
+            self.playback.snapshot().volume as f32
         };
         if level > 0.0 {
             let head = slider.left + (slider.right - slider.left) * level;
@@ -1499,39 +1287,40 @@ impl Ui {
         formats: &Formats,
     ) {
         let l = &self.layout;
-        if self.lyrics.is_empty() {
+        let lines = self.lyrics.lines();
+        let active_line = self.lyrics.active();
+        if lines.is_empty() {
             Self::text(
                 target,
                 "没有歌词",
                 &formats.lyric_dim,
-                &l.lyrics,
+                &d2d(l.lyrics),
                 &brushes.line,
             );
             return;
         }
-        target.PushAxisAlignedClip(&l.lyrics, D2D1_ANTIALIAS_MODE_ALIASED);
+        target.PushAxisAlignedClip(&d2d(l.lyrics), D2D1_ANTIALIAS_MODE_ALIASED);
         let row = l.row_height;
         let center = (l.lyrics.top + l.lyrics.bottom) / 2.0;
-        let total = self.lyrics.len() as i64;
-        let translated = self
-            .lyrics
-            .get(self.active_line.max(0) as usize)
+        let total = lines.len() as i64;
+        let translated = lines
+            .get(active_line.max(0) as usize)
             .map(|line| line.translation.is_some())
             .unwrap_or(false);
 
         for offset in -2i64..=2 {
-            let index = self.active_line + offset;
+            let index = active_line + offset;
             if index < 0 || index >= total {
                 continue;
             }
             // 当前行有译文时，译文占掉了下一行的位置。
-            if offset == 1 && translated && self.active_line >= 0 {
+            if offset == 1 && translated && active_line >= 0 {
                 continue;
             }
-            let line = &self.lyrics[index as usize];
-            let top = center + offset as f32 * row - row / 2.0 + self.lyric_shift;
+            let line = &lines[index as usize];
+            let top = center + offset as f32 * row - row / 2.0 + self.lyrics.shift();
             let area = rect(l.lyrics.left, top, l.lyrics.right, top + row);
-            if offset == 0 && self.active_line >= 0 {
+            if offset == 0 && active_line >= 0 {
                 Self::text(target, &line.text, &formats.lyric_active, &area, &brushes.text);
                 if let Some(translation) = line.translation.as_deref() {
                     let below = rect(l.lyrics.left, top + row, l.lyrics.right, top + row * 2.0);
@@ -1560,7 +1349,7 @@ impl Ui {
         let radius = 8.0 * l.scale;
         target.FillRoundedRectangle(
             &D2D1_ROUNDED_RECT {
-                rect: l.queue,
+                rect: d2d(l.queue),
                 radiusX: radius,
                 radiusY: radius,
             },
@@ -1574,7 +1363,7 @@ impl Ui {
             l.queue.right - pad,
             l.queue.top + row,
         );
-        let count = self.snapshot.tracks.len();
+        let count = self.playback.snapshot().tracks.len();
         Self::text(
             target,
             &format!("播放队列 · {count} 首"),
@@ -1589,10 +1378,10 @@ impl Ui {
             D2D1_ANTIALIAS_MODE_ALIASED,
         );
         let mut top = body_top - self.queue_scroll;
-        for (index, track) in self.snapshot.tracks.iter().enumerate() {
+        for (index, track) in self.playback.snapshot().tracks.iter().enumerate() {
             let bottom = top + row;
             if bottom > body_top && top < l.queue.bottom {
-                let current = index as i64 == self.snapshot.index;
+                let current = index as i64 == self.playback.snapshot().index;
                 if current {
                     target.FillRoundedRectangle(
                         &D2D1_ROUNDED_RECT {
@@ -1619,41 +1408,6 @@ impl Ui {
             }
         }
         target.PopAxisAlignedClip();
-    }
-}
-
-fn fmt_time(seconds: f64) -> String {
-    if !seconds.is_finite() || seconds <= 0.0 {
-        return "00:00".to_string();
-    }
-    let total = seconds as u64;
-    format!("{:02}:{:02}", total / 60, total % 60)
-}
-
-/// 图标字体缺席时的替代画法。只用矩形和椭圆，不碰路径几何——
-/// 这条分支在 Win10 之后基本不会走到，简陋一点比画不出来好。
-#[derive(Clone, Copy)]
-enum Fallback {
-    TriangleRight,
-    TriangleLeft,
-    TwoBars,
-    Bar,
-    Cross,
-    Frame,
-    Dot,
-}
-
-impl Icon {
-    fn fallback(self) -> Fallback {
-        match self {
-            Icon::Play | Icon::Next | Icon::Volume | Icon::Muted => Fallback::TriangleRight,
-            Icon::Prev => Fallback::TriangleLeft,
-            Icon::Pause => Fallback::TwoBars,
-            Icon::Minimize => Fallback::Bar,
-            Icon::Close => Fallback::Cross,
-            Icon::FullMode | Icon::LoopSequence | Icon::LoopOne | Icon::Shuffle => Fallback::Frame,
-            Icon::Note => Fallback::Dot,
-        }
     }
 }
 
@@ -1788,10 +1542,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             // 标题栏的空白处报成标题栏，拖窗、贴边、双击最大化全是系统白送的。
             let (x, y) = screen_point(hwnd, lparam);
             let l = &ui.layout;
-            if contains(&l.title_bar, x, y)
-                && !contains(&l.btn_full, x, y)
-                && !contains(&l.btn_min, x, y)
-                && !contains(&l.btn_close, x, y)
+            if l.title_bar.contains(x, y)
+                && !l.btn_full.contains(x, y)
+                && !l.btn_min.contains(x, y)
+                && !l.btn_close.contains(x, y)
             {
                 return LRESULT(HTCAPTION as isize);
             }

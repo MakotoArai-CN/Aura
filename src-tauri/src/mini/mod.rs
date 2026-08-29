@@ -12,12 +12,11 @@
 //! 搜索、发现、设置这些要联网解析的界面不在轻量模式里，触发时回到完整模式。
 
 pub mod commands;
+pub mod shared;
 pub mod snapshot;
 
 #[cfg(target_os = "windows")]
 mod audio;
-#[cfg(target_os = "windows")]
-mod lyrics;
 #[cfg(target_os = "windows")]
 mod win;
 
