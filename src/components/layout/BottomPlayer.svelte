@@ -908,9 +908,9 @@
   .footer {
     --cover-accent-rgb: 1, 122, 254;
     --cover-accent: rgb(var(--cover-accent-rgb));
-    /* 展开/收起的节奏统一在这里定义，`.footer-main` 的高度动画和脚本里的兜底
-       定时器都引用它。0.5s 对一次全屏展开来说太长，落定前的那段就是用户说的
-       「慢一拍」；换成 300ms + 快出慢入，点下去立刻就在动。 */
+    /* 展开/收起的节奏统一在这里定义，`.footer-main` 的高度动画、`.songdetail-wrapper`
+       的入场延迟（靠变量继承读到）和脚本里的兜底定时器都引用它。0.5s 对一次全屏展开
+       来说太长，落定前的那段就是用户说的「慢一拍」；换成 300ms + 快出慢入。 */
     --player-expand-dur: 300ms;
     --player-expand-ease: cubic-bezier(0.22, 0.9, 0.24, 1);
     height: 100px;
@@ -921,15 +921,23 @@
     border-radius: 10px;
     position: fixed;
     bottom: 0;
+    /* 显式给 left，让两个状态用同一套定位方式：收起态原来是 left:auto（静态位置，
+       解析结果同样是 0），展开态是 left:0 —— auto→0 不可插值，属于离散切换。
+       写死 0 之后横向几何完全由 width + margin 决定，两者都能平滑过渡。 */
+    left: 0;
     width: 98vw;
-    /* 只过渡这两个：footerdef（无内容时沉下去）要的就是它们。
-       原来是 `0.5s` 简写 = all，于是展开时 width(98vw→100vw) 和 margin(1vh 1vw→0)
-       也参与动画——两个都是布局属性，每帧都要把整条播放器连同里面的歌词页重新布局，
-       而歌词页那层 .bg 是全屏 48~72px 模糊，跟着重算一遍。展开卡顿的大头在这。
-       现在这两个属性瞬时切换：视觉上是动画起点的一次 1vw/1vh 微跳，换掉的是每帧布局。 */
+    /* width(98vw→100vw) 和 margin(1vh 1vw→0) 是布局属性，之前被摘出过渡就是因为
+       它们每帧都会把整条播放器连同里面那页歌词重新布局，而歌词页底下垫着全屏
+       48~72px 模糊的封面，跟着重算一遍 —— 那才是真正的开销。
+       现在 `.songdetail-wrapper` 的盒子已经改成视口尺寸、跟父级尺寸解耦（见
+       NowPlayingView），每帧重排的只剩播放条自己那几个 flex 项；常驻模糊也已经由
+       `.footer-main.resizing` 在动画期间摘掉。所以这两个属性可以重新参与过渡：
+       几何平滑，又不会把整页歌词拖进逐帧布局。 */
     transition:
       opacity var(--player-expand-dur) var(--player-expand-ease),
-      bottom var(--player-expand-dur) var(--player-expand-ease);
+      bottom var(--player-expand-dur) var(--player-expand-ease),
+      width var(--player-expand-dur) var(--player-expand-ease),
+      margin var(--player-expand-dur) var(--player-expand-ease);
     color: var(--text-default-color);
   }
 
