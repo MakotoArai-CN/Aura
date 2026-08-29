@@ -62,10 +62,10 @@
   /**
    * 展开/收起动画进行中。
    *
-   * `.footer-main` 的高度要在 0.5s 内从 100px 变到 100vh，而它身上挂着
+   * `.footer-main` 的高度要在一瞬间从 100px 变到 100vh，而它身上挂着
    * `backdrop-filter: var(--visual-backdrop)`（high 档是 saturate+blur20）。
    * 尺寸每帧都变 → 合成器每帧都得重新为整块离屏纹理做一遍模糊，面积一路涨到全屏，
-   * present 直接落后半秒：状态早就切完了，画面还停在原处，然后一口气追上——
+   * present 直接落后：状态早就切完了，画面还停在原处，然后一口气追上——
    * 就是「点了没反应，然后突然快起来」。液态玻璃那层更糟，除了模糊还要跑
    * feDisplacementMap，收起落定那一下还有一次 toDataURL 卡主线程。
    *
@@ -77,8 +77,8 @@
     void isNowPlaying;
     footerResizing = true;
     // 兜底清除：transitionend 不一定发得出来（高度没实际变化、或元素被移出文档），
-    // 光靠事件会把滤镜永久关掉。时长跟 .footer-main 的 transition: 0.5s 对齐。
-    const timer = setTimeout(() => (footerResizing = false), 560);
+    // 光靠事件会把滤镜永久关掉。要比 --player-expand-dur(300ms) 略长一点。
+    const timer = setTimeout(() => (footerResizing = false), 380);
     return () => clearTimeout(timer);
   });
   // 玻璃表面只在 high / ultra 档 + 液态玻璃主题下启用。现在走原生 backdrop-filter，
@@ -382,6 +382,21 @@
     if (isNowPlaying) onCloseNowPlaying();
     else navigate({ type: "nowplaying" });
   }
+
+  /**
+   * 把"播放器已展开"这件事发布到 body 上。
+   *
+   * 展开后 `.footer` 是 z-index:320 的全屏层，但仍有 position: fixed 的浮动按钮
+   * （歌单页右下角的定位按钮 z-index:900）压在它上面。那些按钮散落在各个视图里，
+   * 而展开状态只有这个组件知道 —— App 那边把上一个视图继续挂着当背景，压根不会
+   * 告诉它们。用一个 body 属性当广播口，谁需要让位谁自己写规则，不用一层层传 prop。
+   */
+  $effect(() => {
+    const body = document.body;
+    if (isNowPlaying) body.setAttribute("data-player-expanded", "true");
+    else body.removeAttribute("data-player-expanded");
+    return () => body.removeAttribute("data-player-expanded");
+  });
 
   function toggleFloatingLyric() {
     // 仅切换开关，浮窗显隐由 LyricSync 统一决策（显式开启会立即显示以给出反馈）。
@@ -893,6 +908,11 @@
   .footer {
     --cover-accent-rgb: 1, 122, 254;
     --cover-accent: rgb(var(--cover-accent-rgb));
+    /* 展开/收起的节奏统一在这里定义，`.footer-main` 的高度动画和脚本里的兜底
+       定时器都引用它。0.5s 对一次全屏展开来说太长，落定前的那段就是用户说的
+       「慢一拍」；换成 300ms + 快出慢入，点下去立刻就在动。 */
+    --player-expand-dur: 300ms;
+    --player-expand-ease: cubic-bezier(0.22, 0.9, 0.24, 1);
     height: 100px;
     display: flex;
     align-items: flex-end;
@@ -902,7 +922,14 @@
     position: fixed;
     bottom: 0;
     width: 98vw;
-    transition: 0.5s;
+    /* 只过渡这两个：footerdef（无内容时沉下去）要的就是它们。
+       原来是 `0.5s` 简写 = all，于是展开时 width(98vw→100vw) 和 margin(1vh 1vw→0)
+       也参与动画——两个都是布局属性，每帧都要把整条播放器连同里面的歌词页重新布局，
+       而歌词页那层 .bg 是全屏 48~72px 模糊，跟着重算一遍。展开卡顿的大头在这。
+       现在这两个属性瞬时切换：视觉上是动画起点的一次 1vw/1vh 微跳，换掉的是每帧布局。 */
+    transition:
+      opacity var(--player-expand-dur) var(--player-expand-ease),
+      bottom var(--player-expand-dur) var(--player-expand-ease);
     color: var(--text-default-color);
   }
 
@@ -930,7 +957,6 @@
   .footer.footerdef {
     opacity: 0;
     bottom: -140px;
-    transition: 0.5s;
     pointer-events: none;
   }
 
@@ -944,7 +970,10 @@
     /* 只让高度参与过渡。原来是 `0.5s` 简写（等于 all），而 backdrop-filter 也是可动画
        属性 —— 动画期间摘掉模糊、落定后装回去这两步都会被插值成 0.5s 的模糊半径动画，
        等于把想省掉的逐帧模糊又原样加了回来。这块只有 height 需要动。 */
-    transition: height 0.5s;
+    transition: height var(--player-expand-dur) var(--player-expand-ease);
+    /* 注意：这里**不能**加 overflow: hidden。收起态的封面是 `top: -30px`，故意探出
+       播放条上沿 30px；一裁就把封面切了。歌词页收起时靠自己的 opacity 退场，
+       不依赖父级裁剪（见 NowPlayingView 的 .songdetail-wrapper）。 */
     /* 视觉档位变量（app.css 按 data-visual 定义）：
        high=毛玻璃恢复最佳效果；mid/low=半透明底色省掉常驻模糊合成 */
     -webkit-backdrop-filter: var(--visual-backdrop);
@@ -1021,14 +1050,23 @@
      展开后 .footer 是 z-index:320 的全屏层，把 .navigation（z-index:100）连同三个
      窗口按钮一起盖住、点都点不到，所以在播放器内部再挂一份。
      收起姿态：以顶边为铰链、朝屏幕里侧向上翻起 90°，等于贴着窗口顶边收平。
-     命中区默认只有一条 10px 高的窄带，免得吞掉展开态本该收到的点击；指针一划入就
-     长到能容纳翻下来的按钮，这样停在按钮上时 :hover 不会断掉又把它翻回去。 */
+     命中区按"三个按钮实际占的区域"的 120% 算：原来是一条 220×10 的窄带，10px 高
+     根本瞄不准，这就是用户说的"触发区域太小"。指针一划入就把带子长到能容纳翻下来的
+     按钮，这样停在按钮上时 :hover 不会断掉又把它翻回去。
+     副作用是好的：歌词区右上角那排微调/翻译按钮本来就会在翻出时整体下移让位
+     （见 NowPlayingView 的 .variant-toggles.pushed-down），现在让位来得更早。 */
   .wc-flyout {
+    /* 按钮区尺寸：单个按钮 = 18px 图标 + 6px padding ×2 = 30px；三个 = 90px，
+       再加 margin-left 4px ×3 和 gap 2px ×2 = 106px 宽、30px 高。
+       .wc-flyout-inner 还有 right:10px / padding-top:5px，所以相对右上角是 116×35。 */
+    --wc-hit-w: 116px;
+    --wc-hit-h: 35px;
+    --wc-hit-scale: 1.2;
     position: absolute;
     top: 0;
     right: 0;
-    width: 220px;
-    height: 10px;
+    width: calc(var(--wc-hit-w) * var(--wc-hit-scale));
+    height: calc(var(--wc-hit-h) * var(--wc-hit-scale));
     /* 必须压过同级的 .songdetail-wrapper（z-index:100，定义在 NowPlayingView.svelte）。
        低于它时整条命中带都被歌曲详情盖住，hover 进不来，按钮量出来是 36×0、点击超时，
        而 TitleBar 那份又被 .footer(320) 盖着 —— 展开态就彻底没有可用的窗口控件了。 */
@@ -1036,6 +1074,15 @@
     /* 透视必须给在命中区（父级）上，否则 rotateX 只是把按钮垂直压扁，没有铰链感 */
     perspective: 620px;
     perspective-origin: top center;
+  }
+
+  /* 窄窗按钮会收紧（见 WindowControls 的 media query），命中区跟着一起算小 */
+  @media (max-width: 720px) {
+    .wc-flyout {
+      /* 单个按钮 = 16px 图标 + 5px padding ×2 = 26px，无 margin-left，gap 2px ×2 */
+      --wc-hit-w: 92px;
+      --wc-hit-h: 31px;
+    }
   }
 
   .wc-flyout:hover {
@@ -1238,6 +1285,12 @@
 
   .liplay {
     animation: rotatecircl 16s 0.5s infinite forwards linear;
+    /* 显式提升成独立合成层。不提升的话这张 200px 源图每帧都要重新缩放到 90px
+       再旋转，而且它外面套着 border-radius:50% + overflow:hidden 的圆形裁剪，
+       每帧还要多一次带遮罩的合成——就是"封面旋转卡卡的"。
+       提升之后纹理只光栅化一次，之后每帧只是改一个变换矩阵。 */
+    will-change: transform;
+    backface-visibility: hidden;
   }
 
   .lipause {
@@ -1521,7 +1574,9 @@
     opacity: 1;
     pointer-events: none;
     transform: translateY(0);
-    transition: opacity 180ms ease, transform 180ms ease;
+    /* 时间文本和进度条/音量占同一个盒子，纯 opacity 对切会被看成"内容一下换掉了"。
+       给一段位移、让退场比入场快一点，读起来才是一次交接。 */
+    transition: opacity 140ms ease-in, transform 220ms cubic-bezier(0.22, 0.9, 0.24, 1);
   }
 
   .bottomprogressbar {
@@ -1537,8 +1592,8 @@
     display: flex;
     opacity: 0;
     pointer-events: none;
-    transform: translateY(3px);
-    transition: opacity 180ms ease, transform 180ms ease;
+    transform: translateY(8px);
+    transition: opacity 220ms ease-out 40ms, transform 220ms cubic-bezier(0.22, 0.9, 0.24, 1) 40ms;
   }
 
   .footertime:hover .bottomprogressbar,
@@ -1551,7 +1606,15 @@
   .footertime:hover .timeswitch,
   .footertime:focus-within .timeswitch {
     opacity: 0;
-    transform: translateY(-3px);
+    transform: translateY(-8px);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .timeswitch,
+    .bottomprogressbar {
+      transform: none !important;
+      transition: opacity 120ms linear;
+    }
   }
 
   .playbar {

@@ -304,20 +304,38 @@
   .songdetail-wrapper {
     --nowplaying-control-height: 100px;
     position: absolute;
-    top: 0;
     left: 0;
     right: 0;
+    /* 盒子必须跟父级 .footer-main 的高度动画解耦：父级展开时从 100px 长到 100vh，
+       而这里只锚在父级底边、高度按视口算，所以整页歌词只布局一次。
+       原来是 top:0 + bottom:100px —— 父级 100px 高的时候这块被压成 0 高，展开的每一帧
+       都要把歌词列表重新布局一遍，还要把下面那层 .bg（全屏 48~72px 模糊的封面）重新
+       模糊一遍。那就是"展开卡卡的"的来源。 */
     bottom: var(--nowplaying-control-height);
+    height: calc(100vh - var(--nowplaying-control-height));
     overflow: hidden;
     -webkit-app-region: no-drag;
-    transition: all 0.5s;
+    /* 入场刻意压在父级高度动画的尾巴上（延迟 200ms / 父级 300ms）。
+       父级不能加 overflow: hidden 裁剪（会切掉探出播放条的圆形封面），所以在父级长到位
+       之前这一页是"画在面板外面"的；等它基本长好再淡入，就不会看到歌词浮在面板上方。
+       visibility 用 0s 立刻切回可见，否则淡入的那一段是对着一个不渲染的子树做的。 */
+    transition: opacity 160ms ease-out 200ms, visibility 0s;
+    visibility: visible;
     z-index: 100;
     opacity: 1;
   }
 
   .songdetail-wrapper.slidedown {
-    top: calc(100% - var(--nowplaying-control-height));
+    /* 收起：位置不动，只淡出。反方向不能延迟——必须先让内容消失，父级再慢慢收回去，
+       否则收的过程中这一页会露在面板外面。
+       淡完之后再切 visibility: hidden（0s + 140ms 延迟就是这个意思）：盒子现在是
+       整屏大小的，光 opacity:0 未必能让合成器丢掉那层全屏模糊的封面纹理，
+       visibility: hidden 才是明确的"整棵子树不参与绘制"。布局仍然保留，
+       所以下次展开不用重新排版。 */
+    opacity: 0;
+    visibility: hidden;
     pointer-events: none;
+    transition: opacity 140ms ease-in, visibility 0s linear 140ms;
   }
 
   .draggable-zone {
@@ -503,7 +521,8 @@
     padding-left: 78px;
     max-width: 460px;
     overflow-y: auto;
-    transition: 0.5s;
+    /* 原来是 `0.5s` 简写 = all：随便哪个属性变了都会被插值 0.5s，包括
+       padding/max-width/font-size 这些一动就要重排整列歌词的。这块本身不需要过渡。 */
     color: var(--lyric-default-color);
     -webkit-app-region: no-drag;
     position: relative;
@@ -611,7 +630,11 @@
 
   .lyric p {
     padding: 12px 18px;
-    transition: opacity 0.18s, color 0.18s, background-color 0.18s, font-size 0.18s;
+    /* 刻意不过渡 font-size：高亮行是 16px→26px，插值这 180ms 等于每帧把整列歌词
+       重新排版一次（后面所有行都要跟着挪），而这一列上面压着 .footerwrap 的
+       backdrop-filter、下面垫着全屏模糊的封面，两层都得跟着重算。换行本来几秒一次，
+       但每次都是一串掉帧。字号瞬时切换，淡入淡出交给 opacity/color。 */
+    transition: opacity 0.18s, color 0.18s, background-color 0.18s;
     border-radius: 12px;
     margin: 0;
     opacity: 0.28;

@@ -4,7 +4,7 @@
   import { localmusic } from "../../lib/providers/localmusic";
   import { player } from "../../lib/player";
   import { playerState } from "../../lib/stores/player";
-  import { cssImageUrl, sizedImageUrl } from "../../lib/resourceUrl";
+  import { cssUrl, sizedImageUrl } from "../../lib/resourceUrl";
   import SongRow from "../ui/SongRow.svelte";
   import { runOnActionKey } from "../../lib/keyboard";
   import { infiniteScroll } from "../../lib/infiniteScroll";
@@ -177,7 +177,9 @@
       <div class="detail-head">
         <div class="detail-head-cover">
           {#if playlistCoverUrl}
-            <div class="covershadow" style:background-image={cssImageUrl(playlist.info.cover_img_url)} style:opacity={1}></div>
+            <!-- 投影用同一张 300px 缩略图。它被 --visual-hero-shadow 模糊过，看不出
+                 分辨率差别，而原图动辄 1000px+，解出来就是 4MB 级的 RGBA。 -->
+            <div class="covershadow" style:background-image={cssUrl(playlistCoverUrl)} style:opacity={1}></div>
             <img src={playlistCoverUrl} alt={playlist.info.title} />
           {:else}
             <div class="cover-placeholder">
@@ -659,7 +661,16 @@
     border: 1px solid var(--glass-border);
     box-shadow: var(--shadow-lift);
     backdrop-filter: var(--visual-overlay-backdrop);
-    transition: transform var(--dur-fast) var(--ease-out-quart);
+    transition: transform var(--dur-fast) var(--ease-out-quart), opacity var(--dur-fast) var(--ease-out-quart);
+  }
+
+  /* 播放器展开时让位。它是 z-index:900 的 fixed 按钮，展开态的播放器只有 320，
+     不主动退场就会一直浮在全屏播放页上面。展开状态由 BottomPlayer 广播到 body
+     （data-player-expanded），这里只管自己怎么退。 */
+  :global(body[data-player-expanded="true"]) .locate-fab {
+    opacity: 0;
+    transform: translateY(8px);
+    pointer-events: none;
   }
 
   .locate-fab:hover:not(:disabled) {
