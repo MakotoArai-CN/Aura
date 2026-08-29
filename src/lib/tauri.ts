@@ -228,6 +228,8 @@ export const windowMaximize = () => invoke("window_maximize");
 export const windowClose = () => invoke("window_close");
 export const windowQuit = () => invoke("window_quit");
 export const showFloatWindow = () => invoke("show_float_window");
+/** 浮窗页面挂载完成的报到。没有这一声，Rust 侧不会把浮窗显示出来。 */
+export const floatWindowReady = () => invoke("float_window_ready");
 export const hideFloatWindow = () => invoke("hide_float_window");
 export const closeFloatWindow = () => invoke("close_float_window");
 export const setFloatWindowHeight = (height: number) =>

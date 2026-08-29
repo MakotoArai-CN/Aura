@@ -446,6 +446,8 @@ pub fn show_float_window(
         #[cfg(not(debug_assertions))]
         let float_url = tauri::WebviewUrl::App("float.html".into());
 
+        FLOAT_READY.store(false, std::sync::atomic::Ordering::Release);
+
         let _float = tauri::WebviewWindowBuilder::new(
             &app,
             "float",
@@ -463,32 +465,39 @@ pub fn show_float_window(
         .transparent(true)
         .always_on_top(true)
         .skip_taskbar(true)
-        .visible(true)
+        // 先建成隐藏的：页面渲染出来之前显示它，等于在桌面上摆一块看不见的挡板
+        // （透明 + 置顶 + 1000x112，鼠标点击全被它吃掉，而关闭按钮就在那张没渲染
+        // 出来的页面里）。`float_window_ready` 收到报到才 show，见 FLOAT_READY。
+        .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+
+        // 贴回销毁前记下的位置，否则会回到默认位置——轻量模式来回一趟歌词条就跑了。
+        // 窗口这会儿还是隐藏的，先摆好位置再显示，用户看不到中间那一跳。
+        if let Some((x, y)) = FLOAT_POSITION.lock().ok().and_then(|slot| *slot) {
+            let _ = _float.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+
+        spawn_float_ready_watchdog(app.clone());
+        return Ok(());
     }
     if let Some(float) = app.get_webview_window("float") {
         let _ = float.set_always_on_top(true);
         let _ = float.set_shadow(false);
-        // 刚建出来的窗口贴回销毁前记下的位置，否则会回到默认位置——轻量模式来回一趟
-        // 歌词条就跑了。没有记录（本次启动第一次开）就保持默认。
-        if just_created {
-            if let Some((x, y)) = FLOAT_POSITION.lock().ok().and_then(|slot| *slot) {
-                let _ = float.set_position(tauri::PhysicalPosition::new(x, y));
-            }
+        // 窗口在、但页面从来没报到过：这就是那块隐形挡板的来源（dev server 重启会
+        // 把它的连接弄断）。重新加载并让看门狗接手，别直接 show。
+        if !FLOAT_READY.load(std::sync::atomic::Ordering::Acquire) {
+            #[cfg(debug_assertions)]
+            eprintln!("[aura] float window exists but never reported ready, reloading");
+            #[cfg(debug_assertions)]
+            let _ = float.navigate(dev_float_url.clone());
+            #[cfg(not(debug_assertions))]
+            let _ = float.eval("location.reload()");
+            spawn_float_ready_watchdog(app.clone());
+            return Ok(());
         }
         float.show().map_err(|e| e.to_string())?;
         apply_float_ignore_from_settings(&app, &settings_state);
-        // 只有复用已经存在的窗口时才重新导航——dev server 重启过的话它可能还停在
-        // 一个已经没人监听的地址上。刚 build 出来的窗口正在加载同一个地址，这时候再
-        // navigate 一次会把那次导航打断，WebView2 可能就停在 about:blank 上不动了。
-        #[cfg(debug_assertions)]
-        if !just_created {
-            match float.navigate(dev_float_url.clone()) {
-                Ok(()) => eprintln!("[aura] float navigate requested {dev_float_url}"),
-                Err(error) => eprintln!("[aura] float navigate failed: {error}"),
-            }
-        }
         #[cfg(debug_assertions)]
         match float.url() {
             Ok(url) => eprintln!("[aura] float url={url} just_created={just_created}"),
@@ -505,6 +514,84 @@ pub fn show_float_window(
     _settings_state: tauri::State<'_, FloatingLyricSettingsState>,
 ) -> Result<(), String> {
     Ok(())
+}
+
+/// 浮窗页面是否已经挂载完成（`float_window_ready` 被调过）。
+///
+/// 存在的意义是：浮窗是 `transparent` + `decorations: false` + `always_on_top` 的
+/// 1000x112 窗口，页面一旦没渲染出来（dev server 重启把它的连接弄断、导航失败），
+/// 剩下的就是一块**看不见但吃光鼠标点击**的矩形压在桌面上，用户完全无从下手——
+/// 关闭按钮就在那张没渲染出来的页面里。所以窗口先建成隐藏的，等页面自己报到再显示。
+#[cfg(desktop)]
+static FLOAT_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 浮窗页面挂载完成后自己调这个。
+///
+/// 显不显示交回 `sync_float_visibility_for_main` 统一决定，不能无脑 show：页面加载
+/// 期间用户可能已经把主窗口调回前台，那时按设置浮窗本该是藏着的。
+#[tauri::command]
+#[cfg(desktop)]
+pub fn float_window_ready(app: AppHandle) {
+    #[cfg(debug_assertions)]
+    eprintln!("[aura] float_window_ready");
+    FLOAT_READY.store(true, std::sync::atomic::Ordering::Release);
+    let main_visible = !MAIN_HIDDEN.load(std::sync::atomic::Ordering::Relaxed);
+    sync_float_visibility_for_main(&app, main_visible);
+}
+
+#[tauri::command]
+#[cfg(not(desktop))]
+pub fn float_window_ready(_app: AppHandle) {}
+
+/// 看门狗是否已经在跑。`show_float_window` 在"窗口在但没报到"这条分支上每次调用都会
+/// 想起一个看门狗，而这条分支会被 `sync_float_visibility_for_main` 的每次可见性翻转
+/// 撞到——不设闸的话会攒下一串线程，各自 reload 一次、各自 destroy 一次。
+#[cfg(desktop)]
+static FLOAT_WATCHDOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 页面迟迟不报到就自救：先重新导航一次，还是不行就把窗口销毁。
+///
+/// 宁可"桌面歌词没开出来"，也不能留一块隐形挡板。销毁后顺带通知主窗，
+/// 让设置里的开关回到关闭状态，用户下次点开才是一次真正的重试。
+#[cfg(desktop)]
+fn spawn_float_ready_watchdog(app: AppHandle) {
+    use std::sync::atomic::Ordering;
+
+    if FLOAT_WATCHDOG.swap(true, Ordering::AcqRel) {
+        return;
+    }
+
+    std::thread::spawn(move || {
+        // 无论从哪个分支退出都要放闸，否则这个窗口这辈子再也等不到第二次自救。
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                FLOAT_WATCHDOG.store(false, Ordering::Release);
+            }
+        }
+        let _guard = Guard;
+
+        std::thread::sleep(std::time::Duration::from_millis(2500));
+        if FLOAT_READY.load(Ordering::Acquire) {
+            return;
+        }
+        if let Some(float) = app.get_webview_window("float") {
+            #[cfg(debug_assertions)]
+            eprintln!("[aura] float window not ready in 2.5s, reloading");
+            let _ = float.eval("location.reload()");
+        }
+
+        std::thread::sleep(std::time::Duration::from_millis(3500));
+        if FLOAT_READY.load(Ordering::Acquire) {
+            return;
+        }
+        eprintln!("[aura] 桌面歌词页面没能加载出来，销毁浮窗以免留下隐形挡板");
+        if let Some(float) = app.get_webview_window("float") {
+            let _ = float.destroy();
+        }
+        let payload = serde_json::json!({ "id": "float-load-failed", "reason": "load-timeout" });
+        let _ = app.emit_to("main", "float-lyric-closed", payload);
+    });
 }
 
 #[tauri::command]

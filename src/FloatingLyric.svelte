@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { closeFloatWindow as closeNativeFloatWindow, emitTo, getFloatingLyricPayload, getFloatingLyricSettings, getFloatWindowPosition, hideFloatWindow, listen, moveFloatWindow, setFloatWindowHeight } from "./lib/tauri";
+  import { closeFloatWindow as closeNativeFloatWindow, emitTo, floatWindowReady, getFloatingLyricPayload, getFloatingLyricSettings, getFloatWindowPosition, hideFloatWindow, listen, moveFloatWindow, setFloatWindowHeight } from "./lib/tauri";
   import { type AppSettings } from "./lib/stores/settings";
   import { getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, type LyricVariantMode } from "./lib/lyrics";
 
@@ -170,6 +170,10 @@
       });
 
       await emitTo("main", "float-lyric-ready");
+      // 向 Rust 报到。浮窗是建成隐藏的，这一声是它被显示出来的唯一条件——页面要是
+      // 没渲染出来（dev server 重启把连接弄断之类），窗口就不会变成桌面上那块
+      // 看不见又吃点击的挡板，看门狗会把它重载或销毁。
+      await floatWindowReady().catch(() => undefined);
       if (disposed) {
         unlistenSettings();
       }
@@ -332,6 +336,13 @@
   let toolbarBackgroundAlpha = $derived(Math.min(0.72, Math.max(0.26, lyricWindow.backgroundAlpha + 0.16)));
   // 锁定后工具栏整体隐藏（解锁与关闭按钮同样藏起）；解锁需从主窗设置里操作。
   let toolbarVisible = $derived(!locked && showToolbar);
+  // 未锁定时背景不允许真的降到 0。
+  //
+  // 窗口是 1000x112 的透明置顶窗，Windows 的命中测试是按 HWND 整块算的，CSS 的
+  // pointer-events 管不到别的窗口——所以未锁定时这一整块都吃鼠标点击。背景一旦全透，
+  // 用户看到的就是"桌面上有一块看不见的地方点不动"。◐- 连按到底会踩到这里，
+  // 留一点底噪让它始终看得见；真想要"只剩歌词"就该锁定，那条路是真穿透。
+  let effectiveBgAlpha = $derived(locked ? 0 : Math.max(0.08, lyricWindow.backgroundAlpha));
 
   $effect(() => {
     if (Math.abs(floatHeight - lastFloatHeight) < 2) return;
@@ -345,7 +356,7 @@
   class:locked
   class:two-lines={showTwoLines}
   class:staggered={staggeredLayout}
-  style="font-size: {lyricWindow.fontSize}px; min-height: {floatHeight}px; --lyric-custom-color: {lyricWindow.color}; --lyric-gradient-from: {lyricWindow.gradientFrom ?? '#7cf7c8'}; --lyric-gradient-to: {lyricWindow.gradientTo ?? '#f0a6ff'}; --float-bg-alpha: {locked ? 0 : lyricWindow.backgroundAlpha}; --float-toolbar-color: {toolbarColor}; --float-toolbar-button-bg: {toolbarButtonBg}; --float-toolbar-bg: rgba(18,18,18,{toolbarBackgroundAlpha}); color: {lyricWindow.color};"
+  style="font-size: {lyricWindow.fontSize}px; min-height: {floatHeight}px; --lyric-custom-color: {lyricWindow.color}; --lyric-gradient-from: {lyricWindow.gradientFrom ?? '#7cf7c8'}; --lyric-gradient-to: {lyricWindow.gradientTo ?? '#f0a6ff'}; --float-bg-alpha: {effectiveBgAlpha}; --float-toolbar-color: {toolbarColor}; --float-toolbar-button-bg: {toolbarButtonBg}; --float-toolbar-bg: rgba(18,18,18,{toolbarBackgroundAlpha}); color: {lyricWindow.color};"
   onmouseenter={onMouseEnter}
   onmouseleave={onMouseLeave}
   role="region"

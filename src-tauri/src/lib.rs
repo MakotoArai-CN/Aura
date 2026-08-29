@@ -154,6 +154,7 @@ pub fn run() {
             window::get_login_cookies,
             window::clear_login_cookies,
             window::show_float_window,
+            window::float_window_ready,
             window::hide_float_window,
             window::close_float_window,
             window::set_float_window_ignore_mouse,
@@ -339,9 +340,16 @@ fn show_main_window(window: &tauri::WebviewWindow) {
     crate::window::sync_float_visibility_for_main(&window.app_handle(), true);
 }
 
+/// 托盘左键 / 「显示 隐藏」的开关逻辑。
+///
+/// 判据不能只看 `main_window_is_shown`：窗口显示着但被别的窗口压在下面时，用户点托盘
+/// 图标的意图一定是"把它调到前台"，而按可见性判定会去 hide，看起来就是"点了托盘没反应"
+/// （其实是把一个本来就看不见的窗口藏了起来，得再点一次才出来）。所以只有当它确实在
+/// 前台（拿着焦点）时才收起。
 #[cfg(desktop)]
 fn toggle_main_window(window: &tauri::WebviewWindow) {
-    if main_window_is_shown(window) {
+    let focused = window.is_focused().unwrap_or(false);
+    if main_window_is_shown(window) && focused {
         let app = window.app_handle().clone();
         let _ = window.hide();
         crate::window::sync_float_visibility_for_main(&app, false);
