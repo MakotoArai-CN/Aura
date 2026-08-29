@@ -219,6 +219,9 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
         // 位置只活在窗口自身（拖动是直接 set_position 的，settings 里没有 x/y），
         // 销毁前先记下来，重建时贴回去，不然回完整模式歌词条就跑回默认位置了。
         crate::window::remember_float_position(&app);
+        // 作废可能还在睡的浮窗看门狗：这是一次正常销毁，它醒来后不该替我们去发
+        // `float-lyric-closed`（那会把用户的桌面歌词开关静默关掉）。
+        crate::window::note_float_destroyed();
         let _ = float.destroy();
     }
     Ok(())

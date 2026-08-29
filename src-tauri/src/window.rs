@@ -478,6 +478,8 @@ pub fn show_float_window(
             let _ = _float.set_position(tauri::PhysicalPosition::new(x, y));
         }
 
+        // 新的一扇窗 = 新的一条命。必须在起看门狗之前 +1，好让它捕到的是这一代。
+        FLOAT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         spawn_float_ready_watchdog(app.clone());
         return Ok(());
     }
@@ -549,6 +551,21 @@ pub fn float_window_ready(_app: AppHandle) {}
 #[cfg(desktop)]
 static FLOAT_WATCHDOG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// 浮窗的"第几条命"。每次新建、以及每次被别人主动销毁都 +1。
+///
+/// 看门狗线程睡着的那 6 秒里窗口可能已经被别人处理掉了（进轻量模式会主动 destroy 浮窗，
+/// 见 `mini/commands.rs`）。线程不可取消，所以醒来后必须自己判断"我等的还是那一扇窗吗"：
+/// 代数变了就闭嘴退出。否则它会替一次正常的销毁去发 `float-lyric-closed`，把用户的
+/// 桌面歌词开关静默关掉。
+#[cfg(desktop)]
+static FLOAT_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 浮窗被本模块之外的代码销毁时调用，作废当前那条看门狗。
+#[cfg(desktop)]
+pub fn note_float_destroyed() {
+    FLOAT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+}
+
 /// 页面迟迟不报到就自救：先重新导航一次，还是不行就把窗口销毁。
 ///
 /// 宁可"桌面歌词没开出来"，也不能留一块隐形挡板。销毁后顺带通知主窗，
@@ -560,6 +577,7 @@ fn spawn_float_ready_watchdog(app: AppHandle) {
     if FLOAT_WATCHDOG.swap(true, Ordering::AcqRel) {
         return;
     }
+    let generation = FLOAT_GENERATION.load(Ordering::Acquire);
 
     std::thread::spawn(move || {
         // 无论从哪个分支退出都要放闸，否则这个窗口这辈子再也等不到第二次自救。
@@ -571,8 +589,16 @@ fn spawn_float_ready_watchdog(app: AppHandle) {
         }
         let _guard = Guard;
 
+        // 醒来后先确认这扇窗还是我等的那一扇：报到了、代数变了（别人销毁并/或重建过）、
+        // 或者窗口干脆已经没了，三种情况都不该再动手。
+        let still_ours = |app: &AppHandle| {
+            !FLOAT_READY.load(Ordering::Acquire)
+                && FLOAT_GENERATION.load(Ordering::Acquire) == generation
+                && app.get_webview_window("float").is_some()
+        };
+
         std::thread::sleep(std::time::Duration::from_millis(2500));
-        if FLOAT_READY.load(Ordering::Acquire) {
+        if !still_ours(&app) {
             return;
         }
         if let Some(float) = app.get_webview_window("float") {
@@ -582,14 +608,21 @@ fn spawn_float_ready_watchdog(app: AppHandle) {
         }
 
         std::thread::sleep(std::time::Duration::from_millis(3500));
-        if FLOAT_READY.load(Ordering::Acquire) {
+        if !still_ours(&app) {
             return;
         }
         eprintln!("[aura] 桌面歌词页面没能加载出来，销毁浮窗以免留下隐形挡板");
         if let Some(float) = app.get_webview_window("float") {
             let _ = float.destroy();
         }
-        let payload = serde_json::json!({ "id": "float-load-failed", "reason": "load-timeout" });
+        // id 必须每次都不一样：主窗那边（`LyricSync.svelte` 的 `handleFloatLyricClosed`）
+        // 把 id 当一次性 token 去重，字面量会让第二次及以后的超时被整条吞掉——开关停在
+        // 开启、窗口却没有，然后每次主窗可见性翻转都来一轮 6 秒的建/销。
+        let id = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| format!("float-load-failed-{}", d.as_nanos()))
+            .unwrap_or_else(|_| "float-load-failed".to_string());
+        let payload = serde_json::json!({ "id": id, "reason": "load-timeout" });
         let _ = app.emit_to("main", "float-lyric-closed", payload);
     });
 }
