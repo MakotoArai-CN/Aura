@@ -225,6 +225,8 @@ export const getAudioStreamUrl = (url: string, noCacheWrite = false): Promise<st
 
 export const windowMinimize = () => invoke("window_minimize");
 export const windowMaximize = () => invoke("window_maximize");
+/** 真全屏开关（独占整个屏幕，任务栏也没了），返回切换后的状态。最大化只是铺满工作区，两者不是一回事。 */
+export const windowToggleFullscreen = () => invoke<boolean>("window_toggle_fullscreen");
 export const windowClose = () => invoke("window_close");
 export const windowQuit = () => invoke("window_quit");
 export const showFloatWindow = () => invoke("show_float_window");

@@ -6,6 +6,7 @@
   import { deviceTier } from "../../lib/stores/device";
   import { getActiveLyricPayload, getLineVariant, getLyricsVariantAvailability, getNextLyricVariantMode, isLyricVariantModeActive, lyricVariantButtonLabel as getLyricVariantButtonLabel, lyricVariantButtonTitle as getLyricVariantButtonTitle, normalizeLyricVariantMode, parseLyric, type LyricLine, type LyricVariantMode } from "../../lib/lyrics";
   import { runOnActionKey } from "../../lib/keyboard";
+  import { windowToggleFullscreen } from "../../lib/tauri";
   import { tick } from "svelte";
 
   let {
@@ -31,6 +32,49 @@
   // 只有那三个按钮和这排控件真的相交时才让位。窗口够宽时歌词列的右边缘远在按钮
   // 左侧（X 不重叠），窄布局下歌词整块被挤到下半屏（Y 不重叠），这两种情况下移都是白费。
   let variantTogglesPushed = $state(false);
+  /** 真全屏中。双击大封面切换，用来改提示文案。 */
+  let isFullscreen = $state(false);
+
+  /**
+   * 双击大封面切真全屏。
+   *
+   * 和右上角那个「最大化」按钮不是一回事：最大化只铺满工作区，任务栏还在；这里走
+   * Rust 的 `set_fullscreen`，独占整个屏幕。做成双击是因为封面本身没有单击行为，
+   * 双击不会和任何既有手势打架。
+   */
+  async function toggleFullscreen() {
+    try {
+      isFullscreen = await windowToggleFullscreen();
+    } catch {
+      // 非 Tauri 环境（浏览器里开 dist）没有这个命令，静默忽略即可。
+    }
+  }
+
+  /**
+   * 全屏时 Esc 先退全屏，不要直接把播放页收起来。
+   *
+   * Esc 默认绑的是「收起播放页」（`settings.keyboardShortcuts.closeNowPlaying`），
+   * 分发在 App 那边。全屏是从播放页里进去的，一路退回去的期望顺序是
+   * 全屏 → 展开态 → 收起，一步跨两级会让人措手不及；而且真全屏下 Esc 退出是系统级习惯。
+   * 用 capture 阶段抢在 App 的 window 监听之前处理，并 stopPropagation 掉。
+   */
+  $effect(() => {
+    if (!isFullscreen) return;
+    const onKeydown = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      void toggleFullscreen();
+    };
+    window.addEventListener("keydown", onKeydown, true);
+    return () => window.removeEventListener("keydown", onKeydown, true);
+  });
+
+  // 播放页收起时顺手退全屏。否则窗口会停在独占整屏的姿态上，而里面显示的是歌单页，
+  // 用户既没有全屏的心理预期，也找不到退出的入口（双击封面那块已经不在屏上了）。
+  $effect(() => {
+    if (!visible && isFullscreen) void toggleFullscreen();
+  });
   $effect(() => {
     if (!windowControlsRevealed || !variantTogglesEl || !windowControlsEl) {
       variantTogglesPushed = false;
@@ -217,7 +261,14 @@
     <!-- Left: cover -->
     <div class="detail-head">
       <div>
-        <div class="detail-head-cover">
+        <div
+          class="detail-head-cover"
+          role="button"
+          tabindex="0"
+          title={isFullscreen ? "双击退出全屏" : "双击全屏"}
+          ondblclick={toggleFullscreen}
+          onkeydown={(e) => runOnActionKey(e, toggleFullscreen)}
+        >
           {#if bgUrl}
             <div class="covershadow" style:background-image={cssUrl(bgBlurUrl)}></div>
             <img src={bgUrl} alt="cover" />
@@ -445,7 +496,13 @@
     z-index: 1;
   }
 
-  .detail-head-cover { position: relative; }
+  /* 双击这块切真全屏。cursor 不改成 pointer——它不是单击可用的按钮，给个默认光标
+     配 title 提示更诚实。`.draggable-zone` 覆盖了顶部 80px，那一段收不到双击，
+     所以这里显式声明 no-drag，否则拖窗区会把双击吃成"双击标题栏＝最大化"。 */
+  .detail-head-cover {
+    position: relative;
+    -webkit-app-region: no-drag;
+  }
 
   .covershadow {
     transition: opacity 0.2s, transform 0.2s;

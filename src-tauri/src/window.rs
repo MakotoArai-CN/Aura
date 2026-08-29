@@ -384,11 +384,37 @@ pub fn window_minimize(_window: WebviewWindow) {}
 pub fn window_maximize(window: WebviewWindow) {
     #[cfg(debug_assertions)]
     eprintln!("[aura] window_maximize");
+    // 真全屏状态下"最大化"没有任何可见效果（窗口已经铺满整屏），点了像坏了。
+    // 这时把它当成"退出全屏"，回到普通的最大化姿态。
+    if window.is_fullscreen().unwrap_or(false) {
+        let _ = window.set_fullscreen(false);
+        return;
+    }
     if window.is_maximized().unwrap_or(false) {
         let _ = window.unmaximize();
     } else {
         let _ = window.maximize();
     }
+}
+
+/// 真全屏开关：双击展开态的大封面走这里。
+///
+/// 和最大化不是一回事——最大化只是铺满工作区，任务栏还在；真全屏是独占整个屏幕。
+/// 返回切换后的状态，前端要据此改按钮/提示文案。
+#[tauri::command]
+#[cfg(desktop)]
+pub fn window_toggle_fullscreen(window: WebviewWindow) -> Result<bool, String> {
+    let next = !window.is_fullscreen().map_err(|e| e.to_string())?;
+    window.set_fullscreen(next).map_err(|e| e.to_string())?;
+    #[cfg(debug_assertions)]
+    eprintln!("[aura] window_toggle_fullscreen -> {next}");
+    Ok(next)
+}
+
+#[tauri::command]
+#[cfg(not(desktop))]
+pub fn window_toggle_fullscreen(_window: WebviewWindow) -> Result<bool, String> {
+    Ok(false)
 }
 
 #[tauri::command]

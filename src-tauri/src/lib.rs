@@ -147,6 +147,7 @@ pub fn run() {
             proxy::get_proxy_config,
             window::window_minimize,
             window::window_maximize,
+            window::window_toggle_fullscreen,
             window::window_close,
             window::window_quit,
             window::open_login_window,
