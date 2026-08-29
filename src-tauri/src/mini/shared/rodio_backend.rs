@@ -20,6 +20,11 @@ use rodio::{Decoder, Player};
 
 use super::audio::{AudioBackend, UriResolver};
 
+/// seek 目标的上界。`Duration::from_secs_f64` 溢出时是 panic 而不是报错，
+/// 而快照里的 position 只挡了非有限和负数，所以这里得自己兜一道。
+/// 一天足够覆盖任何一首歌。
+const MAX_SEEK_SECONDS: f64 = 86_400.0;
+
 /// 工作线程写、UI 线程读的那部分状态。
 #[derive(Default)]
 struct Shared {
@@ -196,8 +201,12 @@ impl AudioBackend for RodioBackend {
         let Some(player) = self.player.as_ref() else {
             return Ok(());
         };
+        // 上界必须夹住。Duration::from_secs_f64 对溢出的输入是 panic 而不是返回错误，
+        // 而快照里的 position 只挡了非有限和负数（见 snapshot.rs 的 normalize），
+        // 一个荒谬的大正数能一路传到这里。一天足够覆盖任何一首歌，越界的目标
+        // 交给 try_seek 去失败就行——它失败是被吞掉的，panic 不是。
         let target = if seconds.is_finite() && seconds > 0.0 {
-            seconds
+            seconds.min(MAX_SEEK_SECONDS)
         } else {
             0.0
         };

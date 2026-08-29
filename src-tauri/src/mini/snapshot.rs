@@ -113,8 +113,13 @@ impl MiniSnapshot {
             let last = self.tracks.len() as i64 - 1;
             self.index = self.index.clamp(0, last);
         }
+        // 上界也要夹。下游 rodio 的 seek 走 Duration::from_secs_f64，那个函数对溢出
+        // 的输入是 panic 而不是报错，一个荒谬的大正数（手改快照、旧版本格式）就能把
+        // 原生窗口线程打崩。一天足够覆盖任何一首歌。
         if !self.position.is_finite() || self.position < 0.0 {
             self.position = 0.0;
+        } else {
+            self.position = self.position.min(86_400.0);
         }
         if !self.volume.is_finite() {
             self.volume = default_volume();

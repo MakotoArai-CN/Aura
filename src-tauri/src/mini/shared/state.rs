@@ -35,7 +35,6 @@ pub enum Action {
     Load { index: i64 },
     Play,
     Pause,
-    Seek(f64),
     /// 停下并显示提示，不再继续往后跳。
     Halt(&'static str),
 }
@@ -202,11 +201,17 @@ impl Playback {
         self.begin_current(false)
     }
 
-    /// 一首播完了。单曲循环回到 0 重播，否则往后一首。
+    /// 一首播完了。单曲循环重新装载同一首，否则往后一首。
     pub fn on_ended(&mut self) -> Vec<Action> {
         self.failures = 0;
         if self.snapshot.loop_mode == LOOP_ONE {
-            return vec![Action::Seek(0.0), Action::Play];
+            // 不能只发 Seek(0) + Play。rodio 的队列播完就空了，对着空队列 seek 什么都
+            // 不会发生，单曲循环会静悄悄地停住。必须重新 Load 同一首。
+            //
+            // 换后端之前用的是 WinRT MediaPlayer，源播完还挂在那儿，seek 回 0 是有效的，
+            // 所以这个写法一直没暴露问题。
+            self.snapshot.position = 0.0;
+            return self.begin_current(false);
         }
         self.step(1, false)
     }
@@ -364,12 +369,16 @@ mod tests {
     }
 
     #[test]
-    fn loop_one_replays_instead_of_advancing() {
+    fn loop_one_reloads_instead_of_advancing() {
         let mut p = playback(3);
         p.snapshot.loop_mode = LOOP_ONE;
         let actions = p.on_ended();
-        assert_eq!(actions, vec![Action::Seek(0.0), Action::Play]);
+        // 必须是重新 Load，不能是 Seek(0)：rodio 播完队列就空了，对空队列 seek 没有任何
+        // 效果，单曲循环会静悄悄地停住。
+        assert_eq!(loaded_index(&actions), Some(0), "单曲循环要重新装载同一首");
+        assert!(actions.contains(&Action::Play));
         assert_eq!(p.index(), 0, "单曲循环不该换曲");
+        assert_eq!(p.snapshot.position, 0.0, "重播要从头开始");
     }
 
     #[test]

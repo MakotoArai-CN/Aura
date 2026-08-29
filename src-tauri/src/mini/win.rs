@@ -681,9 +681,6 @@ impl Ui {
                     let _ = self.engine.pause();
                     self.media.set_playing(false);
                 }
-                Action::Seek(target) => {
-                    let _ = self.engine.seek(target);
-                }
                 Action::Halt(_) => {
                     // 提示文案已经记在状态机里。停手就意味着后面排着的动作都作废。
                     queue.clear();
