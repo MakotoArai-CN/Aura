@@ -353,7 +353,7 @@ async fn write_download_metadata(path: &Path, metadata: Option<DownloadMetadata>
         Ok(()) => Ok(true),
         Err(error) if sidecar_written => {
             #[cfg(debug_assertions)]
-            eprintln!("[listen1] embedded metadata write failed, sidecar kept: {error}");
+            eprintln!("[aura] embedded metadata write failed, sidecar kept: {error}");
             Ok(true)
         }
         Err(error) => Err(error),

@@ -67,7 +67,10 @@ impl RodioBackend {
         *shared.volume.lock().unwrap_or_else(|e| e.into_inner()) = 1.0;
 
         match rodio::stream::DeviceSinkBuilder::open_default_sink() {
-            Ok(device) => {
+            Ok(mut device) => {
+                // 关掉 rodio 自己在 drop 时打的那行提示。退出轻量模式时销毁输出设备
+                // 是本来就该发生的事，不是异常，那行「Dropping DeviceSink…」纯粹是噪音。
+                device.log_on_drop(false);
                 let player = Player::connect_new(device.mixer());
                 Self {
                     _device: Some(device),

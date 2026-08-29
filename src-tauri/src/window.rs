@@ -188,7 +188,7 @@ pub fn get_floating_lyric_settings(
 pub fn open_login_window(app: AppHandle, url: String) -> Result<(), String> {
     let parsed = tauri::Url::parse(&url).map_err(|e| e.to_string())?;
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] open_login_window {url}");
+    eprintln!("[aura] open_login_window {url}");
 
     // 惰性创建登录窗口：平时不驻留 WebView 进程，节省内存。
     let login = match app.get_webview_window("login") {
@@ -338,7 +338,7 @@ pub async fn clear_login_cookies(_app: AppHandle, _url: String, _names: Vec<Stri
 #[cfg(desktop)]
 pub fn window_minimize(window: WebviewWindow) {
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] window_minimize");
+    eprintln!("[aura] window_minimize");
     let app = window.app_handle().clone();
     let is_main = window.label() == "main";
     let _ = window.minimize();
@@ -355,7 +355,7 @@ pub fn window_minimize(_window: WebviewWindow) {}
 #[cfg(desktop)]
 pub fn window_maximize(window: WebviewWindow) {
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] window_maximize");
+    eprintln!("[aura] window_maximize");
     if window.is_maximized().unwrap_or(false) {
         let _ = window.unmaximize();
     } else {
@@ -371,7 +371,7 @@ pub fn window_maximize(_window: WebviewWindow) {}
 #[cfg(desktop)]
 pub fn window_close(window: WebviewWindow) {
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] window_close");
+    eprintln!("[aura] window_close");
     let app = window.app_handle().clone();
     let is_main = window.label() == "main";
     let _ = window.hide();
@@ -387,7 +387,7 @@ pub fn window_close(_window: WebviewWindow) {}
 #[tauri::command]
 pub fn window_quit(app: AppHandle) {
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] window_quit");
+    eprintln!("[aura] window_quit");
     app.exit(0);
 }
 
@@ -398,7 +398,7 @@ pub fn show_float_window(
     settings_state: tauri::State<'_, FloatingLyricSettingsState>,
 ) -> Result<(), String> {
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] show_float_window");
+    eprintln!("[aura] show_float_window");
     #[cfg(debug_assertions)]
     let dev_float_url = app
         .config()
@@ -457,14 +457,14 @@ pub fn show_float_window(
         #[cfg(debug_assertions)]
         if !just_created {
             match float.navigate(dev_float_url.clone()) {
-                Ok(()) => eprintln!("[listen1] float navigate requested {dev_float_url}"),
-                Err(error) => eprintln!("[listen1] float navigate failed: {error}"),
+                Ok(()) => eprintln!("[aura] float navigate requested {dev_float_url}"),
+                Err(error) => eprintln!("[aura] float navigate failed: {error}"),
             }
         }
         #[cfg(debug_assertions)]
         match float.url() {
-            Ok(url) => eprintln!("[listen1] float url={url} just_created={just_created}"),
-            Err(error) => eprintln!("[listen1] float url read failed: {error}"),
+            Ok(url) => eprintln!("[aura] float url={url} just_created={just_created}"),
+            Err(error) => eprintln!("[aura] float url read failed: {error}"),
         }
     }
     Ok(())
@@ -495,7 +495,7 @@ pub fn hide_float_window(_app: AppHandle) {}
 #[cfg(desktop)]
 pub fn close_float_window(app: AppHandle) -> Result<(), String> {
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] close_float_window");
+    eprintln!("[aura] close_float_window");
     if let Some(float) = app.get_webview_window("float") {
         let _ = float.set_ignore_cursor_events(false);
         float.hide().map_err(|e| e.to_string())?;

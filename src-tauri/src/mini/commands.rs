@@ -194,7 +194,7 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
                 return;
             }
             if let Err(err) = restore_main_window(&target) {
-                eprintln!("[listen1] 回到完整模式失败：{err}");
+                eprintln!("[aura] 回到完整模式失败：{err}");
             }
             // 回到完整模式了，托盘那条改回「切换轻量模式」。
             crate::sync_lite_menu_label(&target, false);

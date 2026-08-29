@@ -238,7 +238,7 @@ pub fn read_audio_tags(path: String) -> Result<AudioMeta, String> {
             // 读不出标签不算失败：至少还能给出文件名和 sidecar/.lrc 里的东西。
             // 返回 Err 的老做法让前端把这首歌记成「扫过了，没信息」，再也不会重试，
             // 也就再没机会联网补齐——这正是本地歌显示不出歌手/封面的一条路径。
-            eprintln!("[listen1] read tags failed, falling back to sidecar: {path} ({error})");
+            eprintln!("[aura] read tags failed, falling back to sidecar: {path} ({error})");
             return Ok(sidecar_audio_meta(&path, sidecar));
         }
     };

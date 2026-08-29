@@ -15,19 +15,19 @@ pub fn run() {
     let stream_base_url = match proxy::ensure_stream_server() {
         Ok(url) => url.to_string(),
         Err(err) => {
-            eprintln!("[listen1] failed to start stream server: {err}");
+            eprintln!("[aura] failed to start stream server: {err}");
             String::new()
         }
     };
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] starting app, stream_base_url={stream_base_url}");
+    eprintln!("[aura] starting app, stream_base_url={stream_base_url}");
 
     // 设备分级决定 WebView2 渲染策略。必须在首个 WebView 创建前设置。
     // 与渲染质量无关的省内存开关（OOUI/SmartScreen/独立音频进程）三档通用；
     // 只有非 high 档才额外关掉 GPU 合成走软件渲染——high 档保持 GPU 加速，
     // 视觉效果与 GitHub 原版一致。
     #[cfg(debug_assertions)]
-    eprintln!("[listen1] device_tier={:?}", device_tier::detect());
+    eprintln!("[aura] device_tier={:?}", device_tier::detect());
 
     #[cfg(windows)]
     {
@@ -84,7 +84,7 @@ pub fn run() {
                 setup_tray(app)?;
             }
             #[cfg(debug_assertions)]
-            eprintln!("[listen1] setup complete");
+            eprintln!("[aura] setup complete");
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -487,7 +487,7 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
             match event.id().as_ref() {
                 "quit" => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[listen1] tray quit");
+                    eprintln!("[aura] tray quit");
                     if crate::mini::is_lite_active() {
                         // 轻量模式下 exit(0) 会被 ExitRequested 拦住。先立旗子表明这次
                         // 关窗是要退进程，再请求关窗——原生侧写完进度后自己调 exit(0)。
@@ -499,27 +499,27 @@ fn setup_tray(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
                 }
                 "show" => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[listen1] tray show");
+                    eprintln!("[aura] tray show");
                     reveal_main_window(&app_handle);
                 }
                 "play_pause" => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[listen1] tray play_pause");
+                    eprintln!("[aura] tray play_pause");
                     tray_transport(&app_handle, "play_pause");
                 }
                 "prev" => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[listen1] tray prev");
+                    eprintln!("[aura] tray prev");
                     tray_transport(&app_handle, "prev");
                 }
                 "next" => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[listen1] tray next");
+                    eprintln!("[aura] tray next");
                     tray_transport(&app_handle, "next");
                 }
                 "lite_mode" => {
                     #[cfg(debug_assertions)]
-                    eprintln!("[listen1] tray lite_mode");
+                    eprintln!("[aura] tray lite_mode");
                     toggle_lite_mode(&app_handle);
                 }
                 _ => {}

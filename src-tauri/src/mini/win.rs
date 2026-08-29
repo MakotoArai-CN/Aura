@@ -509,7 +509,7 @@ impl Ui {
             Ok(smtc) => Box::new(smtc),
             Err(err) => {
                 // 接不上系统媒体控制不影响放歌，降级成什么都不做，别把窗口带崩。
-                eprintln!("[listen1] SMTC 初始化失败，媒体键不可用: {err}");
+                eprintln!("[aura] SMTC 初始化失败，媒体键不可用: {err}");
                 Box::new(super::shared::NoopMediaControls)
             }
         };
