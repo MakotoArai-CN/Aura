@@ -305,21 +305,29 @@
     --nowplaying-control-height: 100px;
     position: absolute;
     left: 0;
-    right: 0;
-    /* 盒子必须跟父级 .footer-main 的高度动画解耦：父级展开时从 100px 长到 100vh，
-       而这里只锚在父级底边、高度按视口算，所以整页歌词只布局一次。
-       原来是 top:0 + bottom:100px —— 父级 100px 高的时候这块被压成 0 高，展开的每一帧
-       都要把歌词列表重新布局一遍，还要把下面那层 .bg（全屏 48~72px 模糊的封面）重新
-       模糊一遍。那就是"展开卡卡的"的来源。 */
+    /* 盒子必须跟父级 `.footer-main` 的**尺寸动画**彻底解耦，两个方向都要。
+
+       高度方向：只锚在父级底边、高度按视口算。原来是 top:0 + bottom:100px，父级
+       100px 高的时候这块被压成 0 高，展开的每一帧都要把歌词列表重新布局一遍。
+
+       宽度方向：用 `width: 100vw` 而不是 `right: 0`。`right: 0` 让宽度跟着父级走，
+       而 `.footer` 展开时宽度要从 98vw 长到 100vw —— 于是整页歌词每帧重排，底下那层
+       `.bg`（全屏 48~72px 模糊的封面）也每帧按新尺寸重新模糊一遍。换成视口宽之后，
+       父级怎么长这块的盒子都不变，模糊纹理只光栅化一次。这一条是让 `.footer` 的
+       宽度重新参与过渡的前提。
+       收起态父级内缩 1vw，这块会朝右溢出 1vw：那时它是 visibility: hidden，
+       而且 html/body 都是 overflow: hidden，不会有滚动条。 */
+    width: 100vw;
     bottom: var(--nowplaying-control-height);
     height: calc(100vh - var(--nowplaying-control-height));
     overflow: hidden;
     -webkit-app-region: no-drag;
-    /* 入场刻意压在父级高度动画的尾巴上（延迟 200ms / 父级 300ms）。
+    /* 入场等父级动画走完再开始（延迟 = --player-expand-dur，从 .footer 继承下来的变量）。
        父级不能加 overflow: hidden 裁剪（会切掉探出播放条的圆形封面），所以在父级长到位
-       之前这一页是"画在面板外面"的；等它基本长好再淡入，就不会看到歌词浮在面板上方。
+       之前这一页是"画在面板外面"的；等它长好再淡入，既不会看到歌词浮在面板上方，也不会
+       看到父级左边缘从 1vw 收到 0 的过程中这一整页跟着横向挪 1vw。
        visibility 用 0s 立刻切回可见，否则淡入的那一段是对着一个不渲染的子树做的。 */
-    transition: opacity 160ms ease-out 200ms, visibility 0s;
+    transition: opacity 160ms ease-out var(--player-expand-dur, 300ms), visibility 0s;
     visibility: visible;
     z-index: 100;
     opacity: 1;
@@ -336,6 +344,15 @@
     visibility: hidden;
     pointer-events: none;
     transition: opacity 140ms ease-in, visibility 0s linear 140ms;
+  }
+
+  /* app.css 的全局 reduced-motion 只把 transition-duration 压到 0.01ms，delay 不动。
+     入场那 300ms 延迟在这里就变成纯粹的空等（等完瞬间出现），所以延迟也要归零。 */
+  @media (prefers-reduced-motion: reduce) {
+    .songdetail-wrapper,
+    .songdetail-wrapper.slidedown {
+      transition-delay: 0s !important;
+    }
   }
 
   .draggable-zone {
@@ -726,10 +743,6 @@
     .songdetail-wrapper {
       bottom: var(--nowplaying-control-height);
       overflow-y: auto;
-    }
-
-    .songdetail-wrapper.slidedown {
-      top: calc(100% - var(--nowplaying-control-height));
     }
 
     .draggable-zone {
