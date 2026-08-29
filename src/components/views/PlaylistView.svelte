@@ -223,18 +223,6 @@
               </div>
             {/if}
 
-            {#if currentTrackIndex >= 0}
-              <div class="playlist-button locate-button" onclick={locateCurrentTrack} role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, locateCurrentTrack)} title="滚动到正在播放的这首">
-                <div class="play-list">
-                  <svg width="15" height="15" viewBox="0 0 24 24" style="flex:0 0 15px;margin-right:8px">
-                    <circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/>
-                    <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>
-                  </svg>
-                  定位当前
-                </div>
-              </div>
-            {/if}
-
             {#if isLocal}
               <div class="playlist-button local-action-button" onclick={addLocalTracks} role="button" tabindex="0" onkeydown={(e) => runOnActionKey(e, addLocalTracks)}>
                 <div class="play-list">
@@ -350,6 +338,23 @@
     <div class="empty-state">{loadError || "暂无内容"}</div>
   {/if}
 </div>
+
+<!-- 定位当前：常驻右下角，不跟着列表滚 -->
+{#if playlist}
+  <button
+    class="locate-fab"
+    type="button"
+    disabled={currentTrackIndex < 0}
+    onclick={locateCurrentTrack}
+    title={currentTrackIndex >= 0 ? "滚动到正在播放的这首" : "正在播放的歌不在这个歌单里"}
+    aria-label="定位当前播放"
+  >
+    <svg width="20" height="20" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2.5" fill="currentColor" stroke="none"/>
+      <path d="M12 1.5v3M12 19.5v3M1.5 12h3M19.5 12h3"/>
+    </svg>
+  </button>
+{/if}
 
 <!-- Edit dialog -->
 {#if showEdit}
@@ -561,7 +566,6 @@
 
   .playlist-button.clone-button,
   .playlist-button.edit-button,
-  .playlist-button.locate-button,
   .playlist-button.fav-button {
     flex: 0 0 auto;
   }
@@ -633,6 +637,42 @@
 
   .empty-add-button:hover {
     transform: translateY(-1px);
+  }
+
+  /* 定位当前：常驻右下角的圆形按钮，不跟着列表滚。
+     position: fixed 与本文件的 .shadow 是同一套，在这棵树里可靠；
+     底部让开播放器的高度。 */
+  .locate-fab {
+    position: fixed;
+    right: 28px;
+    bottom: calc(var(--player-height) + 24px);
+    z-index: 900;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--theme-color);
+    background: var(--dialog-background-color);
+    border: 1px solid var(--glass-border);
+    box-shadow: var(--shadow-lift);
+    backdrop-filter: var(--visual-overlay-backdrop);
+    transition: transform var(--dur-fast) var(--ease-out-quart);
+  }
+
+  .locate-fab:hover:not(:disabled) {
+    transform: scale(1.06);
+  }
+
+  .locate-fab:active:not(:disabled) {
+    transform: scale(0.96);
+  }
+
+  .locate-fab:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
 
   /* Dialog */
