@@ -2,7 +2,7 @@
   import { playerState, progressPercent, positionFormatted, durationFormatted } from "../../lib/stores/player";
   import { player } from "../../lib/player";
   import { settings, resolvedTheme } from "../../lib/stores/settings";
-  import { deviceTier } from "../../lib/stores/device";
+  import { activeGpuAcceleration, deviceTier } from "../../lib/stores/device";
   import { MediaService, myplaylistLib } from "../../lib/providers/index";
   import { sizedImageUrl, proxyResourceUrl } from "../../lib/resourceUrl";
   import { runOnActionKey } from "../../lib/keyboard";
@@ -69,9 +69,23 @@
    * 就是「点了没反应，然后突然快起来」。液态玻璃那层更糟，除了模糊还要跑
    * feDisplacementMap，收起落定那一下还有一次 toDataURL 卡主线程。
    *
-   * 所以动画期间把这些常驻滤镜全部摘掉，落定后再装回去：静止的两个姿态观感不变。
+   * 所以在**没有硬件合成**的机器上，动画期间把这些常驻滤镜摘掉，落定后再装回去；
+   * 有 GPU 时不摘（见下面的 `degradeWhileResizing`）。
    */
   let footerResizing = $state(false);
+  /**
+   * 动画期间**是否需要**摘掉常驻滤镜。
+   *
+   * 有硬件合成时不摘。20px 高斯模糊在 GPU 上跟得上，摘掉反而让用户看到「液态玻璃
+   * 一过渡效果就消失、落定了才突然出现高斯模糊」，收起时反向还多一次半透明闪烁——
+   * 为了省一笔 GPU 上并不贵的开销，换来两个方向的突变，不值得。
+   *
+   * 没有硬件合成时必须摘：实测软件合成下这条链（`saturate(180%) blur(20px)` 加液态
+   * 玻璃那层 `backdrop-filter: url(#SVG位移滤镜)`）让 gpu-process 常驻 66% 一个核，
+   * 面积还要一路涨到全屏。那种情况下宁可观感有落差也得摘，落差用底色加厚 + 过渡遮掉
+   * （见 `.footer-main.resizing` 的样式）。
+   */
+  let degradeWhileResizing = $derived(footerResizing && !$activeGpuAcceleration);
   $effect(() => {
     // 读一下就够，isNowPlaying 一变就重跑
     void isNowPlaying;
@@ -87,7 +101,7 @@
     ($deviceTier === "high" || $deviceTier === "ultra") &&
     $resolvedTheme === "liquidGlass" &&
     !isNowPlaying &&
-    !footerResizing &&
+    !degradeWhileResizing &&
     Boolean($playerState.currentTrack)
   );
   // 相邻封面常驻显示；只有最低档才省掉这两张解码位图。
@@ -516,7 +530,7 @@
   <div
     class="footer-main"
     class:slidedown={isNowPlaying}
-    class:resizing={footerResizing}
+    class:resizing={degradeWhileResizing}
     class:glass-surface={glassSurfaceEnabled}
     bind:this={footerMainEl}
     ontransitionend={(e) => {
@@ -975,10 +989,13 @@
     border-radius: 10px;
     display: flex;
     flex: 1;
-    /* 只让高度参与过渡。原来是 `0.5s` 简写（等于 all），而 backdrop-filter 也是可动画
-       属性 —— 动画期间摘掉模糊、落定后装回去这两步都会被插值成 0.5s 的模糊半径动画，
-       等于把想省掉的逐帧模糊又原样加了回来。这块只有 height 需要动。 */
-    transition: height var(--player-expand-dur) var(--player-expand-ease);
+    /* 只让高度和底色参与过渡。原来是 `0.5s` 简写（等于 all），而 backdrop-filter 也是
+       可动画属性 —— 动画期间摘掉模糊、落定后装回去这两步都会被插值成 0.5s 的模糊半径
+       动画，等于把想省掉的逐帧模糊又原样加了回来。
+       background-color 例外：它只走 paint，不会重新求值滤镜，所以敢让它渐变——
+       无 GPU 时摘掉模糊那一段要靠底色加厚顶上，硬切会看得出来。 */
+    transition: height var(--player-expand-dur) var(--player-expand-ease),
+      background-color 160ms ease;
     /* 注意：这里**不能**加 overflow: hidden。收起态的封面是 `top: -30px`，故意探出
        播放条上沿 30px；一裁就把封面切了。歌词页收起时靠自己的 opacity 退场，
        不依赖父级裁剪（见 NowPlayingView 的 .songdetail-wrapper）。 */
@@ -1001,14 +1018,20 @@
     background-color: transparent;
   }
 
-  /* 展开/收起动画期间摘掉所有常驻模糊（含展开态那层 footerwrap 的）。
-     理由见 script 里 footerResizing 的注释：这块的高度每帧都在变，模糊面积一路涨到
-     全屏，合成器跟不上，画面就落在状态后面。
+  /* 没有硬件合成时，动画期间摘掉所有常驻模糊（含展开态那层 footerwrap 的）。
+     理由见 script 里 degradeWhileResizing 的注释。有 GPU 时这个类根本不会挂上。
      !important 是因为 .footer.expanded .footerwrap 跟这条同特异性但写在后面。 */
   .footer-main.resizing,
   .footer-main.resizing .footerwrap {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
+  }
+
+  /* 摘掉模糊的那一段把底色补厚。不补的话面板变成一块很淡的半透明色，读起来就是
+     「效果整个消失了」，落定时模糊再突然出现；收起方向还会多一次半透明闪烁。
+     background-color 只走 paint，加上过渡也不会把刚摘掉的模糊请回来。 */
+  .footer-main.resizing {
+    background-color: color-mix(in srgb, var(--nav-background-color) 96%, transparent);
   }
 
   .footer-main::before {
