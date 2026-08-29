@@ -16,8 +16,9 @@ const TIER_ORDER: VisualTier[] = ["ultra", "high", "mid", "low"];
  * mid  — 高性能 CPU 无独显：禁用常驻模糊。
  * low  — 中低端 CPU / 低压 U 无独显 / 低配安卓：纯色 UI，禁用全部透明模糊合成。
  *
- * 档位只管 CSS。是否给 WebView 开 GPU 加速由 `enableGpuAcceleration` 独立控制，
- * 和这里的检测结果没有任何关系。
+ * 档位本身只写 CSS 变量。同一份检测结果还兼任 GPU 加速在**自动模式**下的判据
+ * （Rust 侧 `should_enable_gpu_acceleration`：只有 high 才开），用户手动选的
+ * `on`/`off` 优先于检测。
  */
 export const detectedTier = writable<DeviceTier>("mid");
 
@@ -34,16 +35,63 @@ function stepDown(tier: VisualTier, steps: number): VisualTier {
   return TIER_ORDER[index];
 }
 
+/** 两个档位里更差的那个。TIER_ORDER 是好→差，所以下标大的更差。 */
+function worseOf(a: VisualTier, b: VisualTier): VisualTier {
+  const ia = TIER_ORDER.indexOf(a);
+  const ib = TIER_ORDER.indexOf(b);
+  return ib > ia ? b : a;
+}
+
+/**
+ * 本次启动**实际**生效的 GPU 加速状态。
+ *
+ * 之所以不直接用 `$settings.gpuAcceleration`：那是"下一次启动想要的模式"，而且它
+ * 可能是 `auto`——auto 的生效结果只有 Rust 侧的硬件检测知道。分开存才能诚实地告诉
+ * 用户"要重启才生效"，也才能在自动模式下显示"检测结果到底开没开"。
+ *
+ * 初值取 Rust 在页面脚本最前面注入的 `__AURA_GPU_ACTIVE__`（见 lib.rs 的
+ * `gpu_active_plugin`），**必须同步拿到**：下面的 `deviceTier` 要用它决定视觉档位，
+ * 而 async 读回会让启动头几十毫秒先按"没有 GPU"渲染一遍再翻回来，肉眼能看到一次
+ * 观感跳变。非 Tauri 运行时（浏览器里直接开 dist）读不到这个全局，退回 false，
+ * 也就是按"没有硬件合成"处理——那正是浏览器里跑一个桌面壳最保守的假设。
+ */
+function injectedGpuActive(): boolean {
+  if (typeof window === "undefined") return false;
+  return (window as Window & { __AURA_GPU_ACTIVE__?: boolean }).__AURA_GPU_ACTIVE__ === true;
+}
+
+export const activeGpuAcceleration = writable<boolean>(injectedGpuActive());
+
 /**
  * 有效档位：手动选了就用手动的（看门狗与检测都不再插手），"auto" 才走
  * 「检测结果 - 已降档数」。名字保持 deviceTier 不变，消费方无需改动。
+ *
+ * "auto" 且本次启动没有 GPU 时，档位**不优于 mid**。没有硬件合成时那些常驻滤镜
+ * 全落在 CPU 上每帧重跑：`--visual-backdrop: saturate(180%) blur(20px)` 加
+ * `LiquidGlassSurface` 的 `backdrop-filter: url(#SVG位移滤镜)`，实测 gpu-process
+ * 常驻 66% 一个核，同一台机器把 GPU 打开后总 CPU 掉到 0.3~2.2%。
+ *
+ * GPU 现在默认就是 auto（跟着同一套硬件检测走），所以"判定高性能却在软件渲染"这个
+ * 组合只剩一条来路：用户手动把 GPU 关掉。那是他的选择，但效果档位得跟着务实——
+ * 一边关掉硬件合成、一边让 CPU 扛全屏模糊没有道理。
+ *
+ * 用"不优于 mid"而不是"等于 mid"：检测出 low 的机器不能因为没开 GPU 反而被**升**到
+ * mid 去拿更重的效果。看门狗的降档结果同理，仍然能继续往 low 走。
+ *
+ * 选 mid 不选直接 low：mid 让 `--visual-backdrop` 回到 `:root` 的 `none`（底栏的常驻
+ * 毛玻璃没了）、`--glass-blur` 与 `--nav-backdrop-filter` 也是 none，而液态玻璃表面只在
+ * high/ultra 启用，所以 `url()` 位移滤镜一并消失；交互动效则一个不少。low 会连图层
+ * 提升和阴影一起砍掉，为了省 CPU 一步降到那儿没有必要。
+ *
+ * 手动锁了 high/ultra 的人是明确要那个效果，不替他降——他知道自己在换什么。
  */
 export const deviceTier = derived(
-  [detectedTier, runtimeDowngrade, settings],
-  ([$detected, $downgrade, $settings]): VisualTier => {
+  [detectedTier, runtimeDowngrade, settings, activeGpuAcceleration],
+  ([$detected, $downgrade, $settings, $gpuActive]): VisualTier => {
     const manual = $settings.effectTier;
     if (manual !== "auto") return manual;
-    return stepDown($detected, $downgrade);
+    const auto = stepDown($detected, $downgrade);
+    return $gpuActive ? auto : worseOf(auto, "mid");
   },
 );
 
@@ -72,16 +120,11 @@ export function applyRuntimeDowngrade(): VisualTier {
 export const windowMinimized = writable<boolean>(false);
 
 /**
- * 本次启动**实际**生效的 GPU 加速状态，取自 Rust 侧落盘的开关文件。
- *
- * 之所以不直接用 `$settings.enableGpuAcceleration`：那是"下一次启动想要的值"，
- * 用户刚拨动开关时两者就不一致了。分开存才能诚实地告诉用户"要重启才生效"，
- * 而不是拨完就装作已经生效。
- */
-export const activeGpuAcceleration = writable<boolean>(false);
-
-/**
  * 读回本次启动生效的 GPU 开关，然后把设置里的值回写一遍。
+ *
+ * 读回是兜底：正常情况下注入的 `__AURA_GPU_ACTIVE__` 已经给出同一个值（见
+ * `activeGpuAcceleration`），这里再问一次只为覆盖注入失败的场景，`get_gpu_acceleration`
+ * 返回的是同一个启动快照，两者不会打架。
  *
  * 回写是自愈：开关文件可能因为升级、清理用户目录而消失，而 WebView2 的
  * `--disable-gpu` 参数只认这个文件，不回写的话用户开过的 GPU 会凭空关掉。
@@ -89,9 +132,9 @@ export const activeGpuAcceleration = writable<boolean>(false);
  */
 export async function initGpuAcceleration(): Promise<void> {
   try {
-    const { getGpuAcceleration, setGpuAcceleration } = await import("../tauri");
+    const { getGpuAcceleration, setGpuAccelerationMode } = await import("../tauri");
     activeGpuAcceleration.set(await getGpuAcceleration());
-    await setGpuAcceleration(get(settings).enableGpuAcceleration);
+    await setGpuAccelerationMode(get(settings).gpuAcceleration);
   } catch (error) {
     // 非桌面运行时没有这个概念；读写失败也只是下次启动仍用旧值，不该打断启动。
     console.warn("[device] 同步 GPU 加速开关失败", error);

@@ -353,15 +353,21 @@ export const setEffectTierOverride = (tier: "auto" | "ultra" | DeviceTier): Prom
   invoke("set_effect_tier_override", { tier });
 
 /**
- * GPU 加速开关。默认关，和效果档位互不影响。
+ * GPU 加速开关。三态：`auto` 跟随硬件检测（只有高性能档才开），`on`/`off` 是用户
+ * 的显式选择，永远优先。
  *
  * 只影响下一次启动：`--disable-gpu --disable-gpu-compositing` 必须在第一个 WebView
  * 创建之前写进环境变量，那一刻前端还没运行，所以本次运行改不了。
  */
-export const setGpuAcceleration = (enabled: boolean): Promise<void> =>
-  invoke("set_gpu_acceleration", { enabled });
+export const setGpuAccelerationMode = (mode: "auto" | "on" | "off"): Promise<void> =>
+  invoke("set_gpu_acceleration_mode", { mode });
 
-/** 读 Rust 侧落盘的 GPU 开关值。文件缺失或写坏都返回 false。 */
+/**
+ * 读**本次启动实际生效**的 GPU 状态（不是存的那个模式）。
+ *
+ * 自动模式下这个布尔值才是唯一能知道"检测结果到底开没开 GPU"的途径：模式是 auto，
+ * 生效值可能是开也可能是关。
+ */
 export const getGpuAcceleration = (): Promise<boolean> =>
   invoke<boolean>("get_gpu_acceleration");
 

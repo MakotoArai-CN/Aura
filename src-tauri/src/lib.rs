@@ -24,24 +24,24 @@ pub fn run() {
 
     // WebView2 的启动参数必须在首个 WebView 创建前设置，所以这一段在 Builder 之前。
     // 与渲染质量无关的省内存开关（OOUI/SmartScreen/独立音频进程）三档通用。
-    // GPU 合成由独立开关决定，默认关闭；档位只管 CSS，不再影响 GPU。
+    // GPU 合成由三态开关决定：auto（默认）跟随硬件检测，只有 High 档才开；
+    // 用户手动选的 on/off 一律优先。档位本身只管 CSS。
     #[cfg(debug_assertions)]
     eprintln!("[aura] device_tier={:?}", device_tier::detect());
 
     // 本次启动生效的 GPU 决策在这里定格（函数内部 OnceLock 只读一次盘）。必须早于
     // 前端挂载：`device.ts` 的 `initGpuAcceleration` 会把"下一次启动想要的值"写回
     // 同一个文件，那之后读盘拿到的就是待生效值，设置页的「重启后生效」会说谎。
-    // 下划线前缀：非 Windows 的 release 构建里没有消费方。
-    let _gpu_active = device_tier::should_enable_gpu_acceleration();
+    let gpu_active = device_tier::should_enable_gpu_acceleration();
     #[cfg(debug_assertions)]
-    eprintln!("[aura] gpu_acceleration={_gpu_active}");
+    eprintln!("[aura] gpu_acceleration={gpu_active}");
 
     #[cfg(windows)]
     {
         let mut args = String::from(
             "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,AudioServiceOutOfProcess",
         );
-        if !_gpu_active {
+        if !gpu_active {
             args.push_str(" --disable-gpu --disable-gpu-compositing");
         }
         std::env::set_var("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS", args);
@@ -49,6 +49,7 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(stream_base_url_plugin(&stream_base_url))
+        .plugin(gpu_active_plugin(gpu_active))
         .plugin(login_window_helper_plugin())
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
@@ -177,7 +178,7 @@ pub fn run() {
             system_stats::get_resource_usage,
             device_tier::get_device_tier,
             device_tier::set_effect_tier_override,
-            device_tier::set_gpu_acceleration,
+            device_tier::set_gpu_acceleration_mode,
             device_tier::get_gpu_acceleration,
             update::download_and_run_update,
             update::get_update_assets,
@@ -219,6 +220,20 @@ fn stream_base_url_plugin<R: tauri::Runtime>(base_url: &str) -> tauri::plugin::T
     tauri::plugin::Builder::new("listen1-stream-base")
         .js_init_script(format!(
             "Object.defineProperty(window, '__LISTEN1_STREAM_BASE_URL__', {{ value: {value} }});"
+        ))
+        .build()
+}
+
+/// 把"本次启动到底有没有 GPU 合成"同步喂给前端。
+///
+/// 必须是注入的全局而不是 `invoke` 读回：前端要拿它决定视觉档位，而 async 读回的话
+/// 启动头几十毫秒会先按"没有 GPU"渲染一遍再翻回来，肉眼能看到一次观感跳变。
+/// `should_enable_gpu_acceleration` 是 OnceLock 缓存的启动快照，和真正写进
+/// `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 的是同一个值，不存在两份真相。
+fn gpu_active_plugin<R: tauri::Runtime>(active: bool) -> tauri::plugin::TauriPlugin<R> {
+    tauri::plugin::Builder::new("aura-gpu-active")
+        .js_init_script(format!(
+            "Object.defineProperty(window, '__AURA_GPU_ACTIVE__', {{ value: {active} }});"
         ))
         .build()
 }
