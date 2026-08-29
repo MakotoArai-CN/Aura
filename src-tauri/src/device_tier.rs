@@ -104,7 +104,8 @@ impl GpuMode {
 /// 在**Windows**上安全性质没有丢：`detect()` 读不到内存、读不到 CPU 列表、注册表打不开
 /// 时都落到 `Low` 或 `Mid`，而 auto 模式只有 `High` 才开 GPU——"什么都测不出来"依然等于
 /// "不开 GPU"。而 `--disable-gpu` 整段本来就在 `#[cfg(windows)]` 里，所以这个结论覆盖了
-/// 唯一真正消费这个值的平台。
+/// 唯一把这个值转成 WebView 启动参数的平台。（注入给前端的 `__AURA_GPU_ACTIVE__` 是
+/// 所有平台都有的，前端拿它封顶视觉档位——那条路上判错只会让效果偏保守。）
 ///
 /// 别把这句读成"所有平台上读不到硬件都落 Low"：非 Windows 桌面的 `has_discrete_gpu()`
 /// 是 fail-open（读不到 `/sys/class/drm` 就当作有独显），那条路上"测不出来"会偏向 High。
