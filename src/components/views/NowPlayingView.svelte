@@ -322,32 +322,47 @@
     height: calc(100vh - var(--nowplaying-control-height));
     overflow: hidden;
     -webkit-app-region: no-drag;
-    /* 入场等父级动画走完再开始（延迟 = --player-expand-dur，从 .footer 继承下来的变量）。
-       父级不能加 overflow: hidden 裁剪（会切掉探出播放条的圆形封面），所以在父级长到位
-       之前这一页是"画在面板外面"的；等它长好再淡入，既不会看到歌词浮在面板上方，也不会
-       看到父级左边缘从 1vw 收到 0 的过程中这一整页跟着横向挪 1vw。
-       visibility 用 0s 立刻切回可见，否则淡入的那一段是对着一个不渲染的子树做的。 */
-    transition: opacity 160ms ease-out var(--player-expand-dur, 300ms), visibility 0s;
+    /* 揭帘模型：内容从第 0 帧起就已按最终尺寸完整布局，展开时**只是逐渐不再被裁掉**。
+       裁剪边与父级 `.footer-main` 的顶边同步推进，看起来是面板长开、内容跟着露出来，
+       而不是"面板先长完 300ms、内容再淡进来"——后者是上一版的写法，读起来是两段式。
+
+       两条边为什么能严格对齐、而不是靠调参凑：父级高度 h(t) 从 100px 长到 100vh，
+       它的顶边在 viewport 里位于 H - h(t)；而这块盒子恒定占 y=0 到 y=(H-100px)。
+       于是所需的 top inset = (H - h(t)) / (H - 100px)。把 h(t) = 100 + (H-100)·e(t)
+       代进去得 inset = 1 - e(t)：只要两者用**同一个时长和同一条 easing**，
+       `inset(100%…)` → `inset(0%…)` 的插值天然就是父级高度曲线的镜像，逐帧吻合。
+
+       clip-path 只影响绘制，不触发 layout，所以子元素盒子全程不变，那层全屏模糊的封面
+       （`.bg`）只光栅化一次。父级不能靠 overflow: hidden 裁（会切掉探出播放条的圆形
+       封面），这块自己裁自己正好绕开那个限制——裁剪只作用于自身与后代，够不到兄弟节点
+       `.footerwrap` 里的封面。
+
+       写 `0%` 而不是 `0`：两端同为百分比才是同类插值。 */
+    clip-path: inset(0% 0 0 0);
+    transition:
+      clip-path var(--player-expand-dur, 300ms) var(--player-expand-ease, ease),
+      visibility 0s;
     visibility: visible;
     z-index: 100;
-    opacity: 1;
   }
 
   .songdetail-wrapper.slidedown {
-    /* 收起：位置不动，只淡出。反方向不能延迟——必须先让内容消失，父级再慢慢收回去，
-       否则收的过程中这一页会露在面板外面。
-       淡完之后再切 visibility: hidden（0s + 140ms 延迟就是这个意思）：盒子现在是
-       整屏大小的，光 opacity:0 未必能让合成器丢掉那层全屏模糊的封面纹理，
-       visibility: hidden 才是明确的"整棵子树不参与绘制"。布局仍然保留，
-       所以下次展开不用重新排版。 */
-    opacity: 0;
+    /* 收起：帘反向合上，与父级收回同步。刻意不再叠 opacity——"整体变淡"会盖住"被逐渐
+       裁掉"，两种运动叠在一起反而读不清，而且淡出先行就是上一版那个两段式的镜像。
+       帘完全合上之后才切 visibility: hidden（0s + 一整个时长的延迟）：盒子是整屏大小的，
+       光靠裁剪未必能让合成器丢掉那层全屏模糊的封面纹理，visibility: hidden 才是明确的
+       "整棵子树不参与绘制"。布局仍然保留，所以下次展开不用重新排版。 */
+    clip-path: inset(100% 0 0 0);
     visibility: hidden;
     pointer-events: none;
-    transition: opacity 140ms ease-in, visibility 0s linear 140ms;
+    transition:
+      clip-path var(--player-expand-dur, 300ms) var(--player-expand-ease, ease),
+      visibility 0s linear var(--player-expand-dur, 300ms);
   }
 
   /* app.css 的全局 reduced-motion 只把 transition-duration 压到 0.01ms，delay 不动。
-     入场那 300ms 延迟在这里就变成纯粹的空等（等完瞬间出现），所以延迟也要归零。 */
+     收起那条 visibility 的延迟是一整个时长，不归零的话帘瞬间合上、子树却还要多绘制
+     300ms。所以延迟一起压掉。 */
   @media (prefers-reduced-motion: reduce) {
     .songdetail-wrapper,
     .songdetail-wrapper.slidedown {
