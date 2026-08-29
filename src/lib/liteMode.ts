@@ -124,6 +124,7 @@ async function prepare(track: Track, precache: boolean): Promise<LiteTrack> {
  */
 export async function buildLiteSnapshot(): Promise<LiteSnapshot> {
   const state = get(playerState);
+  const clock = get(playbackClock);
   const index = Math.max(0, state.currentIndex);
   const tracks = state.playlist ?? [];
 
@@ -133,11 +134,18 @@ export async function buildLiteSnapshot(): Promise<LiteSnapshot> {
     prepared.push(withinWindow ? await prepare(tracks[i], true) : baseTrack(tracks[i]));
   }
 
+  // 进度必须读 playbackClock。playerState.position 只在换歌时被 patch 成 0，播放期间的
+  // 高频位置为了避免全应用订阅者每 tick 重算，是单独写进 playbackClock 的——读 playerState
+  // 永远拿到 0，切过去就从头开始放。
+  const position = Number.isFinite(clock.position) && clock.position > 0
+    ? clock.position
+    : (Number.isFinite(state.position) ? state.position : 0);
+
   return {
     version: LITE_SNAPSHOT_VERSION,
     savedAt: Math.floor(Date.now() / 1000),
     index,
-    position: state.position ?? 0,
+    position,
     // 前端音量是 0~100，原生侧和系统播放器都用 0~1。
     volume: Math.min(1, Math.max(0, (state.volume ?? 90) / 100)),
     muted: Boolean(state.muted),
