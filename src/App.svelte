@@ -30,7 +30,7 @@
     showFloatWindow,
   } from "./lib/tauri";
   import { settings, resolvedTheme, type AppSettings } from "./lib/stores/settings";
-  import { deviceTier, initDeviceTier } from "./lib/stores/device";
+  import { deviceTier, initDeviceTier, initGpuAcceleration, windowMinimized } from "./lib/stores/device";
   import { startEffectWatchdog } from "./lib/effectWatchdog";
   import { enableGlobalShortcuts, disableGlobalShortcuts } from "./lib/shortcuts";
   import { bindPlayerKeyboard } from "./lib/keyboard";
@@ -142,12 +142,14 @@
 
   onMount(() => {
     void initDeviceTier();
-    // 效果档位的 Rust 侧副本（决定下次启动的 GPU 参数）可能因为升级或文件被删而缺失，
-    // 每次启动按 localStorage 的现值回写一遍，自愈。
+    // 效果档位的 Rust 侧副本可能因为升级或文件被删而缺失，每次启动按 localStorage
+    // 的现值回写一遍，自愈。
     if (isTauriRuntime()) {
       setEffectTierOverride($settings.effectTier).catch((error) =>
         console.warn("[App] 同步效果档位到 Rust 失败", error)
       );
+      // GPU 开关同理，但必须先读后写：读到的是本次启动真正生效的值，写进去的是下次启动的。
+      void initGpuAcceleration();
     }
     startEffectWatchdog();
 
@@ -181,6 +183,17 @@
       }
     }
     document.addEventListener("visibilitychange", handleMainVisibilityChange);
+
+    // 最小化开关：Rust 只在状态真的翻转时发这条事件。收到以后界面停掉持续动画
+    // （见 app.css 的 [data-minimized] 规则），看门狗也不再采样。
+    // 播放、进度计时、托盘、桌面歌词一律照旧——最小化听歌是最常见的用法。
+    let unlistenMinimized: (() => void) | null = null;
+    void listen<boolean>("main-minimized", (e) => windowMinimized.set(e.payload === true))
+      .then((cleanup) => {
+        unlistenMinimized = cleanup;
+        if (disposed) cleanup();
+      })
+      .catch((error) => console.warn("[App] 最小化监听注册失败", error));
 
     void (async () => {
       await setProxyConfig($settings.proxy).catch((error) => {
@@ -249,6 +262,7 @@
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenMinimized?.();
       void disableGlobalShortcuts();
       window.removeEventListener("listen1-tray-action", handleTrayDomEvent);
       document.removeEventListener("visibilitychange", handleMainVisibilityChange);
@@ -261,6 +275,7 @@
   class="wrap"
   data-theme={$resolvedTheme === "white2" ? "light" : $resolvedTheme === "liquidGlass" ? "liquid-glass" : "dark"}
   data-visual={$deviceTier}
+  data-minimized={$windowMinimized ? "true" : null}
 >
   <div class="body-bg">
     <div class="main" id="listen1-glass-scene">

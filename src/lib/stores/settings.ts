@@ -60,6 +60,14 @@ export interface AppSettings {
    * 注意 "auto" 最高只会自动选到 high；"ultra" 是纯手动选项。
    */
   effectTier: "auto" | "ultra" | "high" | "mid" | "low";
+  /**
+   * 是否给 WebView 开 GPU 加速。默认关。
+   *
+   * 和 effectTier 完全独立：档位只管 CSS 效果，这个只管 WebView2 的
+   * `--disable-gpu --disable-gpu-compositing` 启动参数。改动要下次启动才生效，
+   * 因为那两个参数必须在第一个 WebView 创建之前写进环境变量。
+   */
+  enableGpuAcceleration: boolean;
 }
 
 const defaults: AppSettings = {
@@ -125,6 +133,7 @@ const defaults: AppSettings = {
   },
   zoomLevel: 1,
   effectTier: "auto",
+  enableGpuAcceleration: false,
 };
 
 function loadSettings(): AppSettings {

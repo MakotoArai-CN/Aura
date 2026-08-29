@@ -11,7 +11,7 @@
  * - 降到最低档就自行停止，没有继续采样的意义。
  */
 import { get } from "svelte/store";
-import { applyRuntimeDowngrade, deviceTier } from "./stores/device";
+import { applyRuntimeDowngrade, deviceTier, windowMinimized } from "./stores/device";
 import { settings } from "./stores/settings";
 import { getResourceUsage, isTauriRuntime } from "./tauri";
 
@@ -46,6 +46,15 @@ function stop() {
 async function tick() {
   // 手动锁档期间不采样也不停表：用户可能再切回自动。
   if (get(settings).effectTier !== "auto") {
+    breachStreak = 0;
+    schedule(SAMPLE_MS);
+    return;
+  }
+
+  // 最小化期间不采样。Rust 侧每次要阻塞 220ms 遍历两遍进程表，界面都停画了还去做这个
+  // 本身就是最该省的开销。连击数一并清零：最小化前后的读数不是同一个负载，
+  // 不能接着往上累。
+  if (get(windowMinimized)) {
     breachStreak = 0;
     schedule(SAMPLE_MS);
     return;

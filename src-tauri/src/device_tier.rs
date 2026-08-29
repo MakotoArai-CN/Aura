@@ -36,21 +36,12 @@ fn override_path() -> std::path::PathBuf {
         .join("effect_tier")
 }
 
-/// 读手动锁定的档位（返回 None 表示自动）。
+/// 前端改滑条时调用，把用户锁定的档位落盘。
 ///
-/// 为什么读文件而不读 localStorage：WebView2 的 GPU 启动参数必须在第一个 WebView
-/// 创建之前写进环境变量，那一刻前端还没有运行，localStorage 根本读不到。
-fn manual_override() -> Option<String> {
-    let raw = std::fs::read_to_string(override_path()).ok()?;
-    let value = raw.trim().to_ascii_lowercase();
-    match value.as_str() {
-        "ultra" | "high" | "mid" | "low" => Some(value),
-        // "auto" 或文件内容非法 → 当作没锁。
-        _ => None,
-    }
-}
-
-/// 前端改滑条时调用。写的是"下一次启动"的 GPU 决策依据，本次运行只有 CSS 会立刻变。
+/// 注意：Rust 侧现在**不读**这个文件了。它原来的唯一用途是喂
+/// `should_enable_gpu_acceleration`，而 GPU 已经改由独立开关决定（见下面那个函数的
+/// 注释）。渲染档位现在纯粹由前端按 localStorage 里的 `effectTier` 决定 CSS。
+/// 保留这次写盘是因为它是用户选择的持久记录，删掉会连带改动前端三处调用点。
 #[tauri::command]
 pub fn set_effect_tier_override(tier: String) -> Result<(), String> {
     let value = tier.trim().to_ascii_lowercase();
@@ -66,14 +57,61 @@ pub fn set_effect_tier_override(tier: String) -> Result<(), String> {
     std::fs::write(&path, value).map_err(|err| err.to_string())
 }
 
-/// 供 WebView2 启动参数决策：仅 High 档（或手动锁到 high/ultra）启用 GPU。
-pub fn should_enable_gpu_acceleration() -> bool {
-    // 手动锁档优先，且这里读到的是上一次运行写下的值——用户改档后 GPU 参数要下次
-    // 启动才生效，正是和用户确认过的行为（CSS 立即生效，CPU/GPU 部分下次启动）。
-    if let Some(manual) = manual_override() {
-        return manual == "ultra" || manual == "high";
+/// GPU 加速开关的落盘位置。一行 `on` / `off`。
+///
+/// 和 `effect_tier` 一样必须落盘，不能读 localStorage：WebView2 的 GPU 启动参数要在
+/// 第一个 WebView 创建之前写进环境变量，那一刻前端还没有运行。
+///
+/// 目录沿用 `Listen1`（不是 `Aura`）——旁边的 `effect_tier` 已经在那儿了，换目录会让
+/// 用户已有的锁档设置凭空消失。
+fn gpu_path() -> std::path::PathBuf {
+    crate::cache::user_home_dir()
+        .join("Listen1")
+        .join("gpu_acceleration")
+}
+
+/// 解析开关文件。抽成纯函数是为了能直接测——真正的读盘路径依赖用户目录，
+/// 单元测试里没法稳定构造。
+///
+/// 缺失、内容非法、空文件都按**关闭**处理：这个开关默认关，而"读不出来"和
+/// "用户没开过"应该是同一个结果，不能让一个写坏的文件把 GPU 悄悄打开。
+fn parse_gpu_flag(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "on" | "true" | "1" | "yes"
+    )
+}
+
+/// 前端改开关时调用。和档位一样，写的是"下一次启动"的决策依据。
+#[tauri::command]
+pub fn set_gpu_acceleration(enabled: bool) -> Result<(), String> {
+    let path = gpu_path();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    *detected_tier() == DeviceTier::High
+    let value = if enabled { "on" } else { "off" };
+    std::fs::write(&path, value).map_err(|err| err.to_string())
+}
+
+/// 当前落盘的 GPU 开关值，供前端回显。
+#[tauri::command]
+pub fn get_gpu_acceleration() -> bool {
+    should_enable_gpu_acceleration()
+}
+
+/// 供 WebView2 启动参数决策：**只看这个开关，默认关闭**。
+///
+/// 这里刻意不再参考渲染档位。以前是"仅 High 档开 GPU"，也就是 GPU 跟着视觉档位走；
+/// 用户要的是一个独立开关，而且默认不开 GPU，所以现在开关是唯一输入，档位对 GPU
+/// 没有任何影响了。要改 GPU 只有这一个地方，不存在"档位动了 GPU 跟着变"这种隐式联动。
+///
+/// 历史教训：`a0ff44e` 曾把前端看门狗的降档结果落盘，让它参与下一次启动的 GPU 决策
+/// （`973095c` 已 revert）。那条路是自动推断——一次偶发卡顿就能把 GPU 永久关掉，
+/// 而 GPU 一关软件渲染更慢、看门狗又更容易降档，自我强化。显式开关不会有这个问题。
+pub fn should_enable_gpu_acceleration() -> bool {
+    std::fs::read_to_string(gpu_path())
+        .map(|raw| parse_gpu_flag(&raw))
+        .unwrap_or(false)
 }
 
 #[tauri::command]
@@ -243,7 +281,35 @@ fn has_discrete_gpu() -> bool {
 
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
-    use super::is_low_voltage_cpu;
+    use super::{is_low_voltage_cpu, parse_gpu_flag};
+
+    #[test]
+    fn gpu_flag_defaults_to_off() {
+        // 缺失文件走的是 read_to_string 的 Err 分支，这里覆盖"文件在但内容说不清"的情况：
+        // 空、空白、乱码、以及明确的 off，全都必须是关。
+        assert!(!parse_gpu_flag(""));
+        assert!(!parse_gpu_flag("   \n"));
+        assert!(!parse_gpu_flag("off"));
+        assert!(!parse_gpu_flag("false"));
+        assert!(!parse_gpu_flag("0"));
+        assert!(!parse_gpu_flag("garbage"));
+        // 半个词也不能算开——避免 "onward" 之类的内容误判。
+        assert!(!parse_gpu_flag("onward"));
+    }
+
+    #[test]
+    fn gpu_flag_accepts_the_written_form_and_common_synonyms() {
+        // set_gpu_acceleration 写的是 "on"/"off"，这一对必须能往返。
+        assert!(parse_gpu_flag("on"));
+        assert!(!parse_gpu_flag("off"));
+        // 手改文件的人多半会写这些，认了不吃亏。
+        assert!(parse_gpu_flag("true"));
+        assert!(parse_gpu_flag("1"));
+        assert!(parse_gpu_flag("yes"));
+        // 大小写和前后空白都不该影响判断。
+        assert!(parse_gpu_flag("  ON  \r\n"));
+        assert!(parse_gpu_flag("True"));
+    }
 
     #[test]
     fn detects_u_suffix_models() {

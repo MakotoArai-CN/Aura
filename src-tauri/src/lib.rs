@@ -119,6 +119,18 @@ pub fn run() {
                     if window.label() == "main" {
                         let minimized = window.is_minimized().unwrap_or(false);
                         crate::window::sync_float_visibility_for_main(&window.app_handle(), !minimized);
+                        // 顺手告诉前端「现在没人看得见你」，让它停掉持续动画和效果看门狗。
+                        //
+                        // Resized 拖一下窗口就来几十条，所以只在最小化状态真的翻转时才发；
+                        // 否则前端每帧收一条事件，省下的绘制还不够处理事件的开销。
+                        static MAIN_MINIMIZED: std::sync::atomic::AtomicBool =
+                            std::sync::atomic::AtomicBool::new(false);
+                        if MAIN_MINIMIZED.swap(minimized, std::sync::atomic::Ordering::Relaxed)
+                            != minimized
+                        {
+                            use tauri::Emitter;
+                            let _ = window.emit("main-minimized", minimized);
+                        }
                     }
                 }
                 _ => {}
@@ -163,6 +175,8 @@ pub fn run() {
             system_stats::get_resource_usage,
             device_tier::get_device_tier,
             device_tier::set_effect_tier_override,
+            device_tier::set_gpu_acceleration,
+            device_tier::get_gpu_acceleration,
             update::download_and_run_update,
             update::get_update_assets,
             mini::commands::mini_supported,

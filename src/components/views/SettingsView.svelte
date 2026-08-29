@@ -19,6 +19,7 @@
     downloadAndRunUpdate,
     openExternalUrl,
     setEffectTierOverride,
+    setGpuAcceleration,
     isTauriRuntime,
     miniSupported,
     type UpdateAsset,
@@ -37,7 +38,7 @@
     type ShortcutAction,
   } from "../../lib/shortcutConfig";
   import { toast } from "../../lib/stores/toast";
-  import { deviceTier, detectedTier, runtimeDowngrade } from "../../lib/stores/device";
+  import { deviceTier, detectedTier, runtimeDowngrade, activeGpuAcceleration } from "../../lib/stores/device";
 
   /**
    * 效果滑条：0 档是「自动」，右边四档是手动锁定，越往右开销越大。
@@ -73,6 +74,36 @@
     if (!isTauriRuntime()) return;
     setEffectTierOverride(id).catch((error) => {
       console.warn("[SettingsView] 效果档位写入 Rust 失败", error);
+    });
+  }
+
+  /**
+   * GPU 开关的提示语。设置值和本次启动生效的值不一致时才提"重启"，
+   * 免得每次进设置都挂一句"需要重启"让人以为没生效。
+   */
+  let gpuHint = $derived(
+    $settings.enableGpuAcceleration === $activeGpuAcceleration
+      ? $activeGpuAcceleration
+        ? "本次启动已交给 GPU 合成；驱动有问题时可以关掉换软件渲染"
+        : "默认关闭，界面走软件渲染，兼容性最好"
+      : $settings.enableGpuAcceleration
+        ? "已开启，重启后生效（本次启动仍是软件渲染）"
+        : "已关闭，重启后生效（本次启动仍在用 GPU）"
+  );
+
+  /**
+   * 拨 GPU 开关：只写"下次启动用哪个"。
+   *
+   * 不能立即生效也不假装能——`--disable-gpu --disable-gpu-compositing` 必须在第一个
+   * WebView 创建之前进环境变量，等前端跑起来早就晚了。所以这里既不动 activeGpuAcceleration，
+   * 也不重建窗口。
+   */
+  function applyGpuAcceleration(enabled: boolean) {
+    settings.patch({ enableGpuAcceleration: enabled });
+    if (!isTauriRuntime()) return;
+    setGpuAcceleration(enabled).catch((error) => {
+      console.warn("[SettingsView] GPU 开关写入 Rust 失败", error);
+      toast.error("GPU 开关没保存上，下次启动仍是原来的设置");
     });
   }
 
@@ -577,9 +608,20 @@
           {/each}
         </div>
         <span class="effect-tier-note">
-          界面效果立即生效；GPU 加速属于启动参数，改档后要下次启动才会跟着变。
+          只影响界面效果，立即生效；不改变 GPU 加速开关。
         </span>
       </div>
+    </div>
+    <div class="setting-row">
+      <div>
+        <strong>GPU 加速</strong>
+        <span>{gpuHint}</span>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" checked={$settings.enableGpuAcceleration}
+          onchange={(e) => applyGpuAcceleration((e.target as HTMLInputElement).checked)} />
+        <span></span>
+      </label>
     </div>
   </section>
 

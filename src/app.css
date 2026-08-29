@@ -454,6 +454,23 @@
   --lg-ctl-shadow-hover: none;
 }
 
+/* ─── 最小化：没人看得见的时候不要继续画 ───────────────────────────
+ * WebView2 在这个无边框透明窗口上不做遮挡检测，最小化后封面旋转（16s 一圈）和
+ * 播放行的频谱条（1.1s 一轮）会一直合成，CPU 一直下不来。
+ *
+ * 用 paused 而不是 animation: none —— paused 是冻结在当前进度上，还原后接着转；
+ * none 会让动画从头开始，封面角度一跳很显眼。
+ *
+ * 只挂在 .wrap 上：桌面歌词是独立的 WebView，主窗口最小化时它正好要显示出来，
+ * 不能被这条规则波及。
+ * 进度条、计时、播放本身都不在这里——最小化听歌是最常见的用法。 */
+.wrap[data-minimized="true"],
+.wrap[data-minimized="true"] *,
+.wrap[data-minimized="true"] *::before,
+.wrap[data-minimized="true"] *::after {
+  animation-play-state: paused !important;
+}
+
 html, body { height: 100%; width: 100%; overflow: hidden; background: transparent; }
 body { color: var(--text-default-color); }
 

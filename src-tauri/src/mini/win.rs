@@ -63,7 +63,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     GetMessageW, GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, PostQuitMessage,
     RegisterClassExW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos, ShowWindow,
     SystemParametersInfoW, TranslateMessage, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA, HTCAPTION,
-    IDC_ARROW, MSG, SPI_GETWORKAREA, SWP_NOMOVE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+    IDC_ARROW, IsIconic, MSG, SPI_GETWORKAREA, SWP_NOMOVE, SWP_NOZORDER, SW_MINIMIZE, SW_RESTORE,
+    SW_SHOW,
     WM_APP, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP,
     WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSEXW,
     WS_EX_APPWINDOW, WS_MINIMIZEBOX, WS_POPUP,
@@ -811,6 +812,17 @@ impl Ui {
         self.lyrics
             .tick(self.playback.display_position(), self.layout.row_height);
 
+        // 最小化时不必要求重绘。on_paint 那边也拦了一道，这里省的是每 100ms 往消息队列里
+        // 塞一条注定被丢掉的 WM_PAINT。
+        //
+        // last_paint 会停在最小化之前的那一帧，不用管：还原时系统会把整个客户区标记为无效，
+        // 自然会走一次完整的 render 把它刷新。
+        //
+        // 定时器本身照跑——播完自动换下一首、延迟 seek 的重试都挂在它上面，停了就等于最小化
+        // 之后不再换歌。
+        if IsIconic(self.hwnd).as_bool() {
+            return;
+        }
         let key = self.paint_key();
         if key != self.last_paint || self.lyrics.is_sliding() {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
@@ -1069,7 +1081,17 @@ impl Ui {
     unsafe fn on_paint(&mut self) {
         let mut ps = PAINTSTRUCT::default();
         BeginPaint(self.hwnd, &mut ps);
-        let lost = self.render();
+        // 最小化时一帧都不画。BeginPaint/EndPaint 仍然要成对调用——它俩才是清掉无效区域的
+        // 那一步，只 return 的话 WM_PAINT 会被无限重投，消息循环直接空转到满核。
+        //
+        // 判据放在这里而不是各个 InvalidateRect 调用点：托盘的上一首/下一首/暂停正好是
+        // 最小化时最常来的消息，它们都会无条件 InvalidateRect。堵在唯一的出口上，
+        // 以后新增的失效来源也不用记得加判断。
+        let lost = if IsIconic(self.hwnd).as_bool() {
+            false
+        } else {
+            self.render()
+        };
         let _ = EndPaint(self.hwnd, &ps);
         // 设备丢了才丢资源，下一帧会整套重建。
         if lost {

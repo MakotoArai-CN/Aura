@@ -350,6 +350,19 @@ export const getDeviceTier = (): Promise<DeviceTier> =>
 export const setEffectTierOverride = (tier: "auto" | "ultra" | DeviceTier): Promise<void> =>
   invoke("set_effect_tier_override", { tier });
 
+/**
+ * GPU 加速开关。默认关，和效果档位互不影响。
+ *
+ * 只影响下一次启动：`--disable-gpu --disable-gpu-compositing` 必须在第一个 WebView
+ * 创建之前写进环境变量，那一刻前端还没运行，所以本次运行改不了。
+ */
+export const setGpuAcceleration = (enabled: boolean): Promise<void> =>
+  invoke("set_gpu_acceleration", { enabled });
+
+/** 读 Rust 侧落盘的 GPU 开关值。文件缺失或写坏都返回 false。 */
+export const getGpuAcceleration = (): Promise<boolean> =>
+  invoke<boolean>("get_gpu_acceleration");
+
 export async function setAutostart(enabled: boolean): Promise<void> {
   if (!isTauriRuntime()) return;
   if (enabled) await enableAutostartPlugin();
