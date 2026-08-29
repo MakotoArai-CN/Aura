@@ -30,6 +30,7 @@ lofty = "0.22.4"
 base64 = "0.22"
 encoding_rs = "0.8"
 sysinfo = "0.33"
+rodio = { version = "=0.22.2", default-features = false, features = ["playback", "symphonia-mp3", "symphonia-flac", "symphonia-aac", "symphonia-isomp4", "symphonia-ogg", "symphonia-vorbis", "symphonia-wav", "symphonia-pcm"] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-mcp-bridge = "0.10"
@@ -39,8 +40,10 @@ tauri-plugin-global-shortcut = "2"
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
 # 轻量模式（零 WebView 的原生迷你播放器）用到的系统接口：
-# Direct2D/DirectWrite/WIC 自绘界面，WinRT MediaPlayer 交给系统解码与输出。
-# 这些都是系统自带的，不额外增加运行时依赖。
+# Direct2D/DirectWrite/WIC 自绘界面。解码与输出已改成 rodio + symphonia
+# （见 mini/shared/rodio_backend.rs），所以不再需要 Media_Core / Media_Playback；
+# 但换掉 MediaPlayer 之后媒体键、音量 OSD、锁屏曲目信息都得自己接，
+# 于是多出 Media / Storage_Streams / Win32_System_WinRT 三项供 mini/smtc.rs 用。
 windows = { version = "0.61", features = [
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
@@ -52,12 +55,13 @@ windows = { version = "0.61", features = [
   "Win32_Graphics_Dxgi_Common",
   "Win32_System_Com",
   "Win32_System_LibraryLoader",
+  "Win32_System_WinRT",
   "Win32_UI_WindowsAndMessaging",
   "Win32_UI_Input_KeyboardAndMouse",
   "Win32_UI_HiDpi",
   "Foundation",
-  "Media_Core",
-  "Media_Playback",
+  "Media",
+  "Storage_Streams",
 ] }
 
 [features]

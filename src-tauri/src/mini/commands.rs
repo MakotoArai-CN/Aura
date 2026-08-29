@@ -110,6 +110,14 @@ pub async fn mini_fetch_cover(url: String) -> Result<Option<String>, String> {
 /// 签名一过期就再也解析不出新地址，所以这一步不是优化而是前提。
 #[tauri::command]
 pub async fn mini_precache_audio(cache_id: String, url: String) -> Result<Option<String>, String> {
+    precache_audio(&cache_id, &url).await
+}
+
+/// 预缓存的实现本体，Rust 内部也要用。
+///
+/// 原生侧换成 rodio 之后只能播本地文件，播到预缓存窗口之外的曲目时要现下载一份，
+/// 走的就是这里（见 `mini::resolve_playable_file`）。所以它不能只是个 tauri command。
+pub(crate) async fn precache_audio(cache_id: &str, url: &str) -> Result<Option<String>, String> {
     let cache_id = cache_id.trim().to_string();
     if cache_id.is_empty() || cache_id.ends_with(':') {
         return Ok(None);

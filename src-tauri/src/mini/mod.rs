@@ -16,9 +16,11 @@ pub mod shared;
 pub mod snapshot;
 
 #[cfg(target_os = "windows")]
-mod audio;
+mod smtc;
 #[cfg(target_os = "windows")]
 mod win;
+
+use std::path::PathBuf;
 
 pub use snapshot::{MiniSnapshot, MiniTrack};
 
@@ -109,6 +111,58 @@ fn file_uri(path: &str) -> String {
     format!("file:///{trimmed}")
 }
 
+/// 把 [`playable_uri`] 给出的地址落成一个真正能打开的本地文件路径。
+///
+/// rodio 只吃本地文件（理由见 `shared/rodio_backend.rs`），所以远端直链得先下载进磁盘
+/// 音频缓存再播。这一步会走网络，只能在工作线程上调用，绝不能在窗口线程上调。
+pub(crate) fn resolve_playable_file(uri: &str, cache_id: &str) -> Result<PathBuf, String> {
+    if uri.starts_with("file://") {
+        return Ok(PathBuf::from(path_from_file_uri(uri)));
+    }
+
+    // 远端：先查缓存（预缓存窗口内的曲目会在这里命中，一次网络都不走），再下载。
+    let cache_id = cache_id.trim();
+    if !cache_id.is_empty() {
+        if let Some(hit) = crate::cache::audio_cache_lookup(cache_id.to_string()) {
+            return Ok(PathBuf::from(hit));
+        }
+    }
+
+    let fetched = crate::proxy::shared_runtime()
+        .block_on(commands::precache_audio(cache_id, uri))?;
+    fetched
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("拿不到可播放的文件: {uri}"))
+}
+
+/// [`file_uri`] 的逆运算。
+///
+/// 三种形态要分开处理，判据都在斜杠数量和第二个字符上：
+///
+/// - `file:///C:/…`  → `C:/…`      本机盘符路径
+/// - `file:///home/…` → `/home/…`  POSIX 绝对路径，前导斜杠要还回去
+/// - `file://NAS/…`   → `//NAS/…`  UNC，主机名是 authority 不是路径段
+///
+/// 前两种的区别只能看第二个字符是不是冒号。混淆的代价是本地文件全都打不开，
+/// 而报错里只会出现一个看起来很像对的怪路径。
+fn path_from_file_uri(uri: &str) -> String {
+    let (rest, unc) = match uri.strip_prefix("file:///") {
+        Some(rest) => (rest, false),
+        None => (uri.strip_prefix("file://").unwrap_or(uri), true),
+    };
+    let decoded = urlencoding::decode(rest)
+        .map(|value| value.into_owned())
+        .unwrap_or_else(|_| rest.to_string());
+
+    if unc {
+        format!("//{decoded}")
+    } else if decoded.as_bytes().get(1) == Some(&b':') {
+        decoded
+    } else {
+        format!("/{decoded}")
+    }
+}
+
 /// 决定一首歌到底从哪儿播，按"越不容易失效越优先"排序：
 ///
 /// 1. `local_path` —— 本地音乐或前端预缓存后登记的文件，永不过期。
@@ -169,6 +223,34 @@ mod tests {
         let mut item = track("1", "kuwo");
         item.local_path = Some(r"\\NAS\music\a.flac".to_string());
         assert_eq!(playable_uri(&item).unwrap(), "file://NAS/music/a.flac");
+    }
+
+    #[test]
+    fn file_uri_round_trips_back_to_the_original_path() {
+        // rodio 只吃本地文件，所以 playable_uri 给出的 file:// 地址必须能原样还原成
+        // 路径——还原错了表现成"本地音乐全都放不了"，而且报错信息里只会有个怪路径。
+        for original in [
+            "C:/Users/me/My Music/a.flac",
+            "C:/带中文的/目录/歌.mp3",
+            "//NAS/music/a.flac",
+            "/home/me/Music/a.opus",
+        ] {
+            let uri = file_uri(original);
+            assert_eq!(path_from_file_uri(&uri), original, "地址是 {uri}");
+        }
+    }
+
+    #[test]
+    fn file_uri_round_trip_handles_backslashes_and_percent_encoding() {
+        assert_eq!(
+            path_from_file_uri(&file_uri(r"C:\Users\me\a b.mp3")),
+            "C:/Users/me/a b.mp3"
+        );
+        // 缓存目录里的文件名是从 URL 派生的，可能带百分号编码。
+        assert_eq!(
+            path_from_file_uri("file:///C:/cache/a%20b.mp3"),
+            "C:/cache/a b.mp3"
+        );
     }
 
     #[test]

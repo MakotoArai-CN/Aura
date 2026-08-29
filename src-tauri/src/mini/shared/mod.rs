@@ -9,16 +9,20 @@
 //! 否则新后端一开工就得先改这里。硬性约束是它不引用任何平台 crate，也不直接调用
 //! 音频实现——播放状态机通过返回 [`state::Action`] 把要做的事交给调用方。
 
+pub mod audio;
 pub mod format;
 pub mod frame;
 pub mod icon;
 pub mod lyrics;
 pub mod layout;
+pub mod rodio_backend;
 pub mod state;
 
 // 只在这里重导出后端真正用得上的那几个。其余的走全路径引用，免得攒出一堆
 // 谁都没在用的 re-export。
+pub use audio::{AudioBackend, MediaControls, NoopMediaControls, NowPlaying, UriResolver};
 pub use format::fmt_time;
 pub use frame::{Drag, PaintKey};
 pub use icon::{Fallback, Icon};
 pub use layout::{Layout, LOGICAL_HEIGHT, LOGICAL_WIDTH};
+pub use rodio_backend::RodioBackend;

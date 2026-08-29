@@ -72,6 +72,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use super::shared::layout::Rect;
 use super::shared::lyrics::LyricTrack;
 use super::shared::state::{Action, Playback};
+use super::shared::{AudioBackend, MediaControls, NowPlaying, RodioBackend, UriResolver};
 use super::shared::{fmt_time, Drag, Fallback, Icon, Layout, PaintKey, LOGICAL_HEIGHT, LOGICAL_WIDTH};
 use super::snapshot::{self, MiniSnapshot};
 use super::LiteAction;
@@ -391,7 +392,10 @@ impl Formats {
 
 struct Ui {
     hwnd: HWND,
-    engine: super::audio::Engine,
+    engine: Box<dyn AudioBackend>,
+    /// 系统媒体控制（Windows 是 SMTC）。原来这套是 WinRT MediaPlayer 免费带的，
+    /// 自己解码之后必须自己接，否则媒体键和锁屏信息就没了。
+    media: Box<dyn MediaControls>,
     /// 与平台无关的播放状态机。换曲、循环、洗牌、失败退避都在它里面，
     /// 这里只负责把它返回的 `Action` 兑现成对 `engine` 的调用。
     playback: Playback,
@@ -492,8 +496,23 @@ impl Ui {
         let wic: IWICImagingFactory =
             CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
                 .map_err(|err| format!("创建 WIC 工厂失败: {err}"))?;
-        let engine = super::audio::Engine::new()
-            .map_err(|err| format!("初始化系统播放器失败: {err}"))?;
+        // 地址解析：`file://` 直接摊成路径，远端直链先落盘再播。
+        //
+        // rodio 走的 symphonia 需要 `Read + Seek`，喂不了 http；而轻量模式本来就会给
+        // 当前及后续若干首预缓存，走到这里下载的只是预缓存窗口之外的曲目。宁可等它落盘，
+        // 也不要自己写一个可 seek 的 HTTP 读取器——那正是 proxy.rs 刚修掉的那类坑。
+        let resolve: UriResolver = std::sync::Arc::new(|uri: &str, cache_id: &str| {
+            super::resolve_playable_file(uri, cache_id)
+        });
+        let engine = Box::new(RodioBackend::new(resolve));
+        let media: Box<dyn MediaControls> = match super::smtc::Smtc::new(hwnd) {
+            Ok(smtc) => Box::new(smtc),
+            Err(err) => {
+                // 接不上系统媒体控制不影响放歌，降级成什么都不做，别把窗口带崩。
+                eprintln!("[listen1] SMTC 初始化失败，媒体键不可用: {err}");
+                Box::new(super::shared::NoopMediaControls)
+            }
+        };
 
         let dpi = GetDpiForWindow(hwnd);
         let scale = if dpi == 0 { 1.0 } else { dpi as f32 / 96.0 };
@@ -506,6 +525,7 @@ impl Ui {
         let mut ui = Box::new(Self {
             hwnd,
             engine,
+            media,
             playback: Playback::new(snapshot, seed),
             on_return,
             d2d,
@@ -655,9 +675,11 @@ impl Ui {
                 }
                 Action::Play => {
                     let _ = self.engine.play();
+                    self.media.set_playing(true);
                 }
                 Action::Pause => {
                     let _ = self.engine.pause();
+                    self.media.set_playing(false);
                 }
                 Action::Seek(target) => {
                     let _ = self.engine.seek(target);
@@ -665,21 +687,35 @@ impl Ui {
                 Action::Halt(_) => {
                     // 提示文案已经记在状态机里。停手就意味着后面排着的动作都作废。
                     queue.clear();
+                    // 系统面板也别停在"正在播放"上。
+                    self.media.set_playing(false);
                 }
                 Action::Load { index } => {
                     self.lyrics.reset();
                     // 地址解析要查磁盘缓存，所以留在这一侧做，状态机不碰文件系统。
-                    let uri = self
+                    let track = self
                         .playback
                         .snapshot()
                         .tracks
                         .get(index.max(0) as usize)
-                        .and_then(super::playable_uri);
-                    let loaded = match uri {
-                        Some(uri) => self.engine.load(&uri).is_ok(),
+                        .cloned();
+                    let loaded = match track.as_ref().and_then(|t| {
+                        super::playable_uri(t).map(|uri| (uri, t.cache_id()))
+                    }) {
+                        Some((uri, cache_id)) => self.engine.load(&uri, &cache_id).is_ok(),
                         None => false,
                     };
                     if loaded {
+                        // 系统媒体面板跟着换曲刷新。封面用快照里那份本地文件——
+                        // 原生窗口没有 WebView 的图片加载能力，远端地址喂不进去。
+                        if let Some(track) = track.as_ref() {
+                            self.media.set_now_playing(&NowPlaying {
+                                title: &track.title,
+                                artist: &track.artist,
+                                album: &track.album,
+                                cover_path: track.cover_path.as_deref(),
+                            });
+                        }
                         self.playback.on_load_ok();
                     } else {
                         // 这一首废了，后面排着的 Play 也就没有意义了。
@@ -932,6 +968,8 @@ impl Ui {
             .unwrap_or(0);
         self.playback.snapshot_mut().saved_at = saved_at;
         let _ = self.engine.pause();
+        // 收摊：别在系统媒体面板上留一条永远停在这首歌的记录。
+        self.media.clear();
         let snapshot = self.playback.snapshot().clone();
         let _ = snapshot::save(&snapshot);
         (self.on_return)(snapshot);
