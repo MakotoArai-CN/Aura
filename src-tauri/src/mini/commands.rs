@@ -195,8 +195,15 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
     if let Some(main) = app.get_webview_window("main") {
         main.destroy().map_err(|e| e.to_string())?;
     }
-    // 悬浮歌词也依赖 WebView，留着它等于白省。
-    let _ = crate::window::close_float_window(app.clone());
+    // 悬浮歌词也是一个 WebView，留着它等于白省：WebView2 的浏览器 / 渲染器 / GPU /
+    // 网络服务那一组进程只要还有一个 WebView 活着就全都在，实测就是两百多 MB。
+    //
+    // 这里必须 destroy——close_float_window 只是 hide，窗口不可见但 WebView 还在，
+    // 进程一个都不会退，轻量模式的内存优势就全没了。回完整模式之后 App.svelte 的
+    // onMount 会按 enableLyricFloatingWindow 重新把它建出来。
+    if let Some(float) = app.get_webview_window("float") {
+        let _ = float.destroy();
+    }
     Ok(())
 }
 
