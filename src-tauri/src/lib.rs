@@ -125,8 +125,13 @@ pub fn run() {
                 #[cfg(desktop)]
                 tauri::WindowEvent::Resized(_) => {
                     if window.label() == "main" {
-                        let minimized = window.is_minimized().unwrap_or(false);
-                        crate::window::sync_float_visibility_for_main(&window.app_handle(), !minimized);
+                        // 判据是"看得见"，不是"没最小化"：托盘里躺着的窗口是 hide 掉的，
+                        // is_minimized() 仍然是 false。SW_HIDE 本身不发 WM_SIZE，但改显示
+                        // 缩放/换显示器会，那时候要是只看最小化，就会把"在托盘里"误判成
+                        // "回来了"，桌面歌词跟着被藏掉。
+                        let visible = window.is_visible().unwrap_or(false)
+                            && !window.is_minimized().unwrap_or(false);
+                        crate::window::sync_float_visibility_for_main(&window.app_handle(), visible);
                     }
                 }
                 _ => {}
