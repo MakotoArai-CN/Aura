@@ -391,7 +391,7 @@
        写 `0%` 而不是 `0`：两端同为百分比才是同类插值。 */
     clip-path: inset(0% 0 0 0);
     transition:
-      clip-path var(--player-expand-dur, 300ms) var(--player-expand-ease, ease),
+      clip-path var(--player-expand-dur, 420ms) var(--player-expand-ease, ease),
       visibility 0s;
     visibility: visible;
     z-index: 100;
@@ -407,8 +407,8 @@
     visibility: hidden;
     pointer-events: none;
     transition:
-      clip-path var(--player-expand-dur, 300ms) var(--player-expand-ease, ease),
-      visibility 0s linear var(--player-expand-dur, 300ms);
+      clip-path var(--player-expand-dur, 420ms) var(--player-expand-ease, ease),
+      visibility 0s linear var(--player-expand-dur, 420ms);
   }
 
   /* app.css 的全局 reduced-motion 只把 transition-duration 压到 0.01ms，delay 不动。

@@ -91,8 +91,8 @@
     void isNowPlaying;
     footerResizing = true;
     // 兜底清除：transitionend 不一定发得出来（高度没实际变化、或元素被移出文档），
-    // 光靠事件会把滤镜永久关掉。要比 --player-expand-dur(300ms) 略长一点。
-    const timer = setTimeout(() => (footerResizing = false), 380);
+    // 光靠事件会把滤镜永久关掉。要比 --player-expand-dur(420ms) 略长一点。
+    const timer = setTimeout(() => (footerResizing = false), 520);
     return () => clearTimeout(timer);
   });
   // 玻璃表面只在 high / ultra 档 + 液态玻璃主题下启用。现在走原生 backdrop-filter，
@@ -933,9 +933,12 @@
     --cover-accent-rgb: 1, 122, 254;
     --cover-accent: rgb(var(--cover-accent-rgb));
     /* 展开/收起的节奏统一在这里定义，`.footer-main` 的高度动画、`.songdetail-wrapper`
-       的入场延迟（靠变量继承读到）和脚本里的兜底定时器都引用它。0.5s 对一次全屏展开
-       来说太长，落定前的那段就是用户说的「慢一拍」；换成 300ms + 快出慢入。 */
-    --player-expand-dur: 300ms;
+       的揭帘（靠变量继承读到）和脚本里的兜底定时器都引用它。
+       原版那 0.5s 里有相当一部分是等出来的——落定前动画早就看不出在动了，读起来就是
+       「慢一拍」。真正的问题从来不是时长而是逐帧重排，那个已经修掉，所以这里可以给
+       够时间让一次全屏尺度的展开走完整：420ms 是"看得清在动、又不用等"的那一档。
+       曲线仍然快出慢入，点下去第一帧就有明显位移。 */
+    --player-expand-dur: 420ms;
     --player-expand-ease: cubic-bezier(0.22, 0.9, 0.24, 1);
     height: 100px;
     display: flex;
