@@ -22,10 +22,9 @@ pub fn run() {
     #[cfg(debug_assertions)]
     eprintln!("[aura] starting app, stream_base_url={stream_base_url}");
 
-    // 设备分级决定 WebView2 渲染策略。必须在首个 WebView 创建前设置。
-    // 与渲染质量无关的省内存开关（OOUI/SmartScreen/独立音频进程）三档通用；
-    // 只有非 high 档才额外关掉 GPU 合成走软件渲染——high 档保持 GPU 加速，
-    // 视觉效果与 GitHub 原版一致。
+    // WebView2 的启动参数必须在首个 WebView 创建前设置，所以这一段在 Builder 之前。
+    // 与渲染质量无关的省内存开关（OOUI/SmartScreen/独立音频进程）三档通用。
+    // GPU 合成由独立开关决定，默认关闭；档位只管 CSS，不再影响 GPU。
     #[cfg(debug_assertions)]
     eprintln!("[aura] device_tier={:?}", device_tier::detect());
 
