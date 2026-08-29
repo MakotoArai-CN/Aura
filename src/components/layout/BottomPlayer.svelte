@@ -596,7 +596,7 @@
                   <img
                     src={currentCoverUrl}
                     alt=""
-                    class:liplay={$playerState.playing}
+                    class="liplay"
                     class:lipause={!$playerState.playing}
                   />
                 {:else}
@@ -1291,6 +1291,10 @@
     100% { transform: rotate(360deg); }
   }
 
+  /* 旋转动画**常驻**，播放与否只切 animation-play-state（见 .lipause）。
+     原来是 `class:liplay={playing}`：一暂停整条 animation 声明就没了，transform 跟着
+     回到初始值，封面"啪"一下转正。而那时 .lipause 里的 animation-play-state 是挂在
+     一个不存在的动画上，等于没写。 */
   .liplay {
     animation: rotatecircl 16s 0.5s infinite forwards linear;
     /* 显式提升成独立合成层。不提升的话这张 200px 源图每帧都要重新缩放到 90px
@@ -1301,6 +1305,8 @@
     backface-visibility: hidden;
   }
 
+  /* 暂停就停在当下这个角度，不归位。animation-play-state 冻结的是动画时间轴，
+     当前计算出来的 transform 原样保留；恢复播放从同一角度继续。 */
   .lipause {
     animation-play-state: paused;
   }
