@@ -19,7 +19,7 @@
     downloadAndRunUpdate,
     openExternalUrl,
     setEffectTierOverride,
-    setGpuAcceleration,
+    setGpuAccelerationMode,
     isTauriRuntime,
     miniSupported,
     type UpdateAsset,
@@ -84,32 +84,47 @@
   }
 
   /**
-   * GPU 开关的提示语。设置值和本次启动生效的值不一致时才提"重启"，
-   * 免得每次进设置都挂一句"需要重启"让人以为没生效。
+   * GPU 模式的提示语。要同时说清三件事：选的是哪个模式、本次启动**实际**生效的是
+   * 什么、以及改了要不要重启。
+   *
+   * 自动模式必须单独说：模式是 auto 时，"开没开"取决于 Rust 侧的硬件检测，用户光看
+   * 模式名是看不出来的，所以要把检测结果直说。
+   *
+   * 「重启后生效」只在模式蕴含的结果和本次生效值确实矛盾时才提，免得每次进设置都
+   * 挂一句"需要重启"让人以为没生效。auto 模式下不可能矛盾（生效值就是检测结果），
+   * 所以那条分支只属于 on/off。
    */
-  let gpuHint = $derived(
-    $settings.enableGpuAcceleration === $activeGpuAcceleration
-      ? $activeGpuAcceleration
-        ? "本次启动已交给 GPU 合成；驱动有问题时可以关掉换软件渲染"
-        : "默认关闭，界面走软件渲染，兼容性最好"
-      : $settings.enableGpuAcceleration
-        ? "已开启，重启后生效（本次启动仍是软件渲染）"
-        : "已关闭，重启后生效（本次启动仍在用 GPU）"
-  );
+  let gpuHint = $derived.by(() => {
+    const mode = $settings.gpuAcceleration;
+    const active = $activeGpuAcceleration;
+    if (mode === "auto") {
+      return active
+        ? "自动：本机判定为高性能，本次启动已交给 GPU 合成"
+        : "自动：本机未判定为高性能，界面走软件渲染（效果档位会同步降到中档）";
+    }
+    if (mode === "on") {
+      return active
+        ? "已强制开启，本次启动已交给 GPU 合成；驱动有问题时可以改回自动或关闭"
+        : "已强制开启，重启后生效（本次启动仍是软件渲染）";
+    }
+    return active
+      ? "已强制关闭，重启后生效（本次启动仍在用 GPU）"
+      : "已强制关闭，界面走软件渲染，兼容性最好；效果档位会同步降到中档";
+  });
 
   /**
-   * 拨 GPU 开关：只写"下次启动用哪个"。
+   * 选 GPU 模式：只写"下次启动用哪个"。
    *
    * 不能立即生效也不假装能——`--disable-gpu --disable-gpu-compositing` 必须在第一个
    * WebView 创建之前进环境变量，等前端跑起来早就晚了。所以这里既不动 activeGpuAcceleration，
    * 也不重建窗口。
    */
-  function applyGpuAcceleration(enabled: boolean) {
-    settings.patch({ enableGpuAcceleration: enabled });
+  function applyGpuAcceleration(mode: "auto" | "on" | "off") {
+    settings.patch({ gpuAcceleration: mode });
     if (!isTauriRuntime()) return;
-    setGpuAcceleration(enabled).catch((error) => {
-      console.warn("[SettingsView] GPU 开关写入 Rust 失败", error);
-      toast.error("GPU 开关没保存上，下次启动仍是原来的设置");
+    setGpuAccelerationMode(mode).catch((error) => {
+      console.warn("[SettingsView] GPU 模式写入 Rust 失败", error);
+      toast.error("GPU 设置没保存上，下次启动仍是原来的设置");
     });
   }
 
@@ -623,11 +638,14 @@
         <strong>GPU 加速</strong>
         <span>{gpuHint}</span>
       </div>
-      <label class="toggle">
-        <input type="checkbox" checked={$settings.enableGpuAcceleration}
-          onchange={(e) => applyGpuAcceleration((e.target as HTMLInputElement).checked)} />
-        <span></span>
-      </label>
+      <div class="chip-row">
+        <button type="button" class="chip" class:active={$settings.gpuAcceleration === "auto"}
+          onclick={() => applyGpuAcceleration("auto")}>自动</button>
+        <button type="button" class="chip" class:active={$settings.gpuAcceleration === "on"}
+          onclick={() => applyGpuAcceleration("on")}>开启</button>
+        <button type="button" class="chip" class:active={$settings.gpuAcceleration === "off"}
+          onclick={() => applyGpuAcceleration("off")}>关闭</button>
+      </div>
     </div>
   </section>
 

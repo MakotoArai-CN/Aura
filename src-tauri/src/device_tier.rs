@@ -4,8 +4,8 @@
 //! Mid：高性能 CPU、无独显（核显/虚拟显卡）→ 视觉降级。
 //! Low：中低端 CPU（或内存不足）→ 纯色 UI，禁用全部模糊/透明合成效果。
 //!
-//! 注意档位**不再决定 GPU**。GPU 加速现在是一个独立开关（默认关闭），
-//! 见 `should_enable_gpu_acceleration`。档位只影响 CSS 那一层。
+//! 档位同时也是 GPU 加速在**自动模式**下的判据（High 才开）。用户手动选了
+//! 开启/关闭则一律优先，见 `should_enable_gpu_acceleration`。
 
 use serde::Serialize;
 
@@ -60,7 +60,7 @@ pub fn set_effect_tier_override(tier: String) -> Result<(), String> {
     std::fs::write(&path, value).map_err(|err| err.to_string())
 }
 
-/// GPU 加速开关的落盘位置。一行 `on` / `off`。
+/// GPU 加速开关的落盘位置。一行 `auto` / `on` / `off`。
 ///
 /// 和 `effect_tier` 一样必须落盘，不能读 localStorage：WebView2 的 GPU 启动参数要在
 /// 第一个 WebView 创建之前写进环境变量，那一刻前端还没有运行。
@@ -73,27 +73,60 @@ fn gpu_path() -> std::path::PathBuf {
         .join("gpu_acceleration")
 }
 
+/// GPU 加速的三态。
+///
+/// `Auto` 跟随硬件检测（High 才开），`On` / `Off` 是用户的显式选择，永远优先。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl GpuMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            GpuMode::Auto => "auto",
+            GpuMode::On => "on",
+            GpuMode::Off => "off",
+        }
+    }
+}
+
 /// 解析开关文件。抽成纯函数是为了能直接测——真正的读盘路径依赖用户目录，
 /// 单元测试里没法稳定构造。
 ///
-/// 缺失、内容非法、空文件都按**关闭**处理：这个开关默认关，而"读不出来"和
-/// "用户没开过"应该是同一个结果，不能让一个写坏的文件把 GPU 悄悄打开。
-fn parse_gpu_flag(raw: &str) -> bool {
-    matches!(
-        raw.trim().to_ascii_lowercase().as_str(),
-        "on" | "true" | "1" | "yes"
-    )
+/// 缺失、空文件、内容非法一律按 `Auto`。
+///
+/// 这条默认值语义是从"一律按关"翻过来的。原来的理由是"不能让一个写坏的文件把 GPU
+/// 悄悄打开"，那时默认就是关；现在默认是自动，读不出来就该交给硬件检测。安全性质
+/// 并没有丢：`detect()` 在任何读不到硬件信息的情况下都落到 `Low`，而 `Low` 在自动
+/// 模式下不开 GPU——也就是说"什么都测不出来"依然等于"不开 GPU"。
+fn parse_gpu_mode(raw: &str) -> GpuMode {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "on" | "true" | "1" | "yes" => GpuMode::On,
+        "off" | "false" | "0" | "no" => GpuMode::Off,
+        _ => GpuMode::Auto,
+    }
 }
 
 /// 前端改开关时调用。和档位一样，写的是"下一次启动"的决策依据。
 #[tauri::command]
-pub fn set_gpu_acceleration(enabled: bool) -> Result<(), String> {
+pub fn set_gpu_acceleration_mode(mode: String) -> Result<(), String> {
+    // 刻意不复用 parse_gpu_mode：那个函数把认不出来的内容当 auto，用在这里会把前端
+    // 传错的值静默存成 auto。写入口要能报错，读入口才需要宽容。
+    let value = match mode.trim().to_ascii_lowercase().as_str() {
+        "auto" => GpuMode::Auto,
+        "on" => GpuMode::On,
+        "off" => GpuMode::Off,
+        _ => return Err(format!("unknown gpu acceleration mode: {mode}")),
+    };
+
     let path = gpu_path();
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|err| err.to_string())?;
     }
-    let value = if enabled { "on" } else { "off" };
-    std::fs::write(&path, value).map_err(|err| err.to_string())
+    std::fs::write(&path, value.as_str()).map_err(|err| err.to_string())
 }
 
 /// **本次启动实际生效**的 GPU 开关值，供设置页回显「重启后生效」那句提示。
@@ -108,7 +141,8 @@ pub fn get_gpu_acceleration() -> bool {
     should_enable_gpu_acceleration()
 }
 
-/// 供 WebView2 启动参数决策：**只看这个开关，默认关闭**。
+/// 供 WebView2 启动参数决策，也供前端回显。三态：`On`/`Off` 是用户的显式选择，
+/// `Auto`（默认）跟随硬件检测——只有 `High` 档才开 GPU。
 ///
 /// 值在进程内只读一次就定格（`OnceLock`）。这不是性能优化，是正确性要求：WebView2
 /// 的 `--disable-gpu` 只在首个 WebView 创建前生效，所以"本次启动到底有没有 GPU"是
@@ -117,19 +151,22 @@ pub fn get_gpu_acceleration() -> bool {
 /// 在 `lib.rs` 设置 `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` 的地方，早于任何写入，
 /// 因此定格下来的就是真正生效的那个值。
 ///
-/// 这里刻意不再参考渲染档位。以前是"仅 High 档开 GPU"，也就是 GPU 跟着视觉档位走；
-/// 用户要的是一个独立开关，而且默认不开 GPU，所以现在开关是唯一输入，档位对 GPU
-/// 没有任何影响了。要改 GPU 只有这一个地方，不存在"档位动了 GPU 跟着变"这种隐式联动。
-///
+/// 自动模式的判据**只能是启动时的静态硬件检测**，绝不能是运行时的 CPU 看门狗。
 /// 历史教训：`a0ff44e` 曾把前端看门狗的降档结果落盘，让它参与下一次启动的 GPU 决策
-/// （`973095c` 已 revert）。那条路是自动推断——一次偶发卡顿就能把 GPU 永久关掉，
-/// 而 GPU 一关软件渲染更慢、看门狗又更容易降档，自我强化。显式开关不会有这个问题。
+/// （`973095c` 已 revert）。那是自我强化循环——一次偶发卡顿把 GPU 永久关掉，GPU 一关
+/// 软件渲染更慢、看门狗又更容易降档。`detect()` 只看 CPU 型号/核数/频率与独显存在性，
+/// 同一台机器上稳定，不会被一次卡顿改写。
 pub fn should_enable_gpu_acceleration() -> bool {
     static ACTIVE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ACTIVE.get_or_init(|| {
-        std::fs::read_to_string(gpu_path())
-            .map(|raw| parse_gpu_flag(&raw))
-            .unwrap_or(false)
+        let mode = std::fs::read_to_string(gpu_path())
+            .map(|raw| parse_gpu_mode(&raw))
+            .unwrap_or(GpuMode::Auto);
+        match mode {
+            GpuMode::On => true,
+            GpuMode::Off => false,
+            GpuMode::Auto => *detected_tier() == DeviceTier::High,
+        }
     })
 }
 
@@ -300,34 +337,39 @@ fn has_discrete_gpu() -> bool {
 
 #[cfg(all(test, not(target_os = "android")))]
 mod tests {
-    use super::{is_low_voltage_cpu, parse_gpu_flag};
+    use super::{is_low_voltage_cpu, parse_gpu_mode, GpuMode};
 
     #[test]
-    fn gpu_flag_defaults_to_off() {
-        // 缺失文件走的是 read_to_string 的 Err 分支，这里覆盖"文件在但内容说不清"的情况：
-        // 空、空白、乱码、以及明确的 off，全都必须是关。
-        assert!(!parse_gpu_flag(""));
-        assert!(!parse_gpu_flag("   \n"));
-        assert!(!parse_gpu_flag("off"));
-        assert!(!parse_gpu_flag("false"));
-        assert!(!parse_gpu_flag("0"));
-        assert!(!parse_gpu_flag("garbage"));
-        // 半个词也不能算开——避免 "onward" 之类的内容误判。
-        assert!(!parse_gpu_flag("onward"));
+    fn gpu_mode_defaults_to_auto() {
+        // 缺失文件走的是 read_to_string 的 Err 分支（那里直接给 Auto），这里覆盖
+        // "文件在但内容说不清"：空、空白、乱码全都必须落到 Auto，交给硬件检测。
+        assert_eq!(parse_gpu_mode(""), GpuMode::Auto);
+        assert_eq!(parse_gpu_mode("   \n"), GpuMode::Auto);
+        assert_eq!(parse_gpu_mode("garbage"), GpuMode::Auto);
+        // 半个词不能算数——"onward" 不是 on，"offer" 不是 off。
+        assert_eq!(parse_gpu_mode("onward"), GpuMode::Auto);
+        assert_eq!(parse_gpu_mode("offer"), GpuMode::Auto);
+        // 显式写 auto 当然也是 Auto。
+        assert_eq!(parse_gpu_mode("auto"), GpuMode::Auto);
     }
 
     #[test]
-    fn gpu_flag_accepts_the_written_form_and_common_synonyms() {
-        // set_gpu_acceleration 写的是 "on"/"off"，这一对必须能往返。
-        assert!(parse_gpu_flag("on"));
-        assert!(!parse_gpu_flag("off"));
+    fn gpu_mode_reads_the_written_forms_and_common_synonyms() {
+        // set_gpu_acceleration_mode 写的是这三个词，必须能往返。
+        assert_eq!(parse_gpu_mode("auto"), GpuMode::Auto);
+        assert_eq!(parse_gpu_mode("on"), GpuMode::On);
+        assert_eq!(parse_gpu_mode("off"), GpuMode::Off);
         // 手改文件的人多半会写这些，认了不吃亏。
-        assert!(parse_gpu_flag("true"));
-        assert!(parse_gpu_flag("1"));
-        assert!(parse_gpu_flag("yes"));
+        assert_eq!(parse_gpu_mode("true"), GpuMode::On);
+        assert_eq!(parse_gpu_mode("1"), GpuMode::On);
+        assert_eq!(parse_gpu_mode("yes"), GpuMode::On);
+        assert_eq!(parse_gpu_mode("false"), GpuMode::Off);
+        assert_eq!(parse_gpu_mode("0"), GpuMode::Off);
+        assert_eq!(parse_gpu_mode("no"), GpuMode::Off);
         // 大小写和前后空白都不该影响判断。
-        assert!(parse_gpu_flag("  ON  \r\n"));
-        assert!(parse_gpu_flag("True"));
+        assert_eq!(parse_gpu_mode("  ON  \r\n"), GpuMode::On);
+        assert_eq!(parse_gpu_mode("Off\n"), GpuMode::Off);
+        assert_eq!(parse_gpu_mode(" AUTO "), GpuMode::Auto);
     }
 
     #[test]

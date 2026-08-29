@@ -24,7 +24,8 @@ pub fn run() {
 
     // WebView2 的启动参数必须在首个 WebView 创建前设置，所以这一段在 Builder 之前。
     // 与渲染质量无关的省内存开关（OOUI/SmartScreen/独立音频进程）三档通用。
-    // GPU 合成由独立开关决定，默认关闭；档位只管 CSS，不再影响 GPU。
+    // GPU 合成由三态开关决定：auto（默认）跟随硬件检测，只有 High 档才开；
+    // 用户手动选的 on/off 一律优先。档位本身只管 CSS。
     #[cfg(debug_assertions)]
     eprintln!("[aura] device_tier={:?}", device_tier::detect());
 
@@ -177,7 +178,7 @@ pub fn run() {
             system_stats::get_resource_usage,
             device_tier::get_device_tier,
             device_tier::set_effect_tier_override,
-            device_tier::set_gpu_acceleration,
+            device_tier::set_gpu_acceleration_mode,
             device_tier::get_gpu_acceleration,
             update::download_and_run_update,
             update::get_update_assets,

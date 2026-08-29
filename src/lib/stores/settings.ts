@@ -61,13 +61,16 @@ export interface AppSettings {
    */
   effectTier: "auto" | "ultra" | "high" | "mid" | "low";
   /**
-   * 是否给 WebView 开 GPU 加速。默认关。
+   * 是否给 WebView 开 GPU 加速。三态，默认 `auto`。
    *
-   * 和 effectTier 完全独立：档位只管 CSS 效果，这个只管 WebView2 的
-   * `--disable-gpu --disable-gpu-compositing` 启动参数。改动要下次启动才生效，
-   * 因为那两个参数必须在第一个 WebView 创建之前写进环境变量。
+   * `auto` 跟随设备检测：判定为高性能（现代 CPU + 独显）就开 GPU，否则不开——
+   * 这和 effectTier 的自动降级是同一套判据，所以"自动降级的机器"不会一边砍效果
+   * 一边还让 CPU 去做合成。`on`/`off` 是用户的显式选择，永远优先于检测。
+   *
+   * 改动要下次启动才生效：`--disable-gpu --disable-gpu-compositing` 必须在第一个
+   * WebView 创建之前写进环境变量。
    */
-  enableGpuAcceleration: boolean;
+  gpuAcceleration: "auto" | "on" | "off";
 }
 
 const defaults: AppSettings = {
@@ -133,7 +136,7 @@ const defaults: AppSettings = {
   },
   zoomLevel: 1,
   effectTier: "auto",
-  enableGpuAcceleration: false,
+  gpuAcceleration: "auto",
 };
 
 function loadSettings(): AppSettings {
@@ -170,6 +173,19 @@ function loadSettings(): AppSettings {
       delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown; enableImmersivePlayer?: unknown }).playerTheme;
       delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown; enableImmersivePlayer?: unknown }).enableMineradioStage;
       delete (next as AppSettings & { playerTheme?: unknown; enableMineradioStage?: unknown; enableImmersivePlayer?: unknown }).enableImmersivePlayer;
+
+      // GPU 开关从二值迁到三态。旧档里 `enableGpuAcceleration === true` 是用户明确
+      // 开过，迁成 "on"；其余（含 false）迁成 "auto"。
+      //
+      // false 不迁成 "off" 是有意的：false 原本就是默认值，存下来的 false 分不清
+      // "用户明确关过"和"从没碰过这一项"。而现在的默认是自动，把从没碰过的人钉死在
+      // 关闭上，等于让他们继续用 CPU 做合成——那正是这次要修的问题。真的想关的人
+      // 重新点一次即可，代价远小于反过来。
+      const legacyGpuFlag = (parsed as { enableGpuAcceleration?: unknown }).enableGpuAcceleration;
+      if (!["auto", "on", "off"].includes(next.gpuAcceleration)) {
+        next.gpuAcceleration = legacyGpuFlag === true ? "on" : "auto";
+      }
+      delete (next as AppSettings & { enableGpuAcceleration?: unknown }).enableGpuAcceleration;
       return next;
     }
   } catch {}
