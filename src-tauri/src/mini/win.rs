@@ -120,6 +120,21 @@ pub fn is_open() -> bool {
     OPEN.load(Ordering::Acquire)
 }
 
+/// 出了这个作用域就把「窗口开着」的状态清干净，正常返回和 panic 都算。
+///
+/// 不能只在 `pump()` 之后手动清：那底下是一千多行 unsafe 的 Direct2D / WinRT 调用，
+/// 一次 panic 就会让 OPEN 永远停在 true。之后托盘的「退出」和「切换轻量模式」都会
+/// 走进"轻量模式还开着"那条分支，对着一个已经没了的窗口 PostMessage，两个菜单项
+/// 从此都没有任何反应，「显示/隐藏」也只会去 focus 那个不存在的窗口。
+struct OpenGuard;
+
+impl Drop for OpenGuard {
+    fn drop(&mut self) {
+        OPEN.store(false, Ordering::Release);
+        WINDOW.store(0, Ordering::Release);
+    }
+}
+
 /// 请求关窗。窗口不在就什么都不做。真正的清理在窗口线程里做。
 pub fn close() {
     let raw = WINDOW.load(Ordering::Acquire);
@@ -189,10 +204,9 @@ where
                     let hwnd = ui.hwnd;
                     WINDOW.store(hwnd.0 as isize, Ordering::Release);
                     OPEN.store(true, Ordering::Release);
+                    let _open_guard = OpenGuard;
                     let _ = tx.send(Ok(()));
                     ui.pump();
-                    OPEN.store(false, Ordering::Release);
-                    WINDOW.store(0, Ordering::Release);
                 }
                 Err(err) => {
                     let _ = tx.send(Err(err));
