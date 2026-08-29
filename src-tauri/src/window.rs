@@ -48,6 +48,28 @@ fn floating_settings_snapshot(payload: &str) -> FloatingLyricSettingsSnapshot {
 }
 
 
+/// 悬浮歌词窗口被销毁前记下的屏幕位置。
+///
+/// 位置只存在于窗口自身：拖动时前端是直接 `move_float_window` 调 `set_position`，
+/// settings 里没有 x/y。所以 destroy 一次位置就没了。轻量模式必须 destroy 它才能真的
+/// 放掉 WebView2 那一组进程（见 `mini::commands::enter_impl`），于是销毁前把位置存到
+/// 这里，下次建窗时贴回去，回完整模式后歌词条还在原地。
+///
+/// 只在进程内有效，本来也只需要撑过「销毁 → 重建」这一个来回。
+static FLOAT_POSITION: std::sync::Mutex<Option<(i32, i32)>> = std::sync::Mutex::new(None);
+
+/// 在销毁悬浮歌词窗口之前调用，记下它当前的位置。
+#[cfg(desktop)]
+pub fn remember_float_position(app: &AppHandle) {
+    if let Some(float) = app.get_webview_window("float") {
+        if let Ok(pos) = float.outer_position() {
+            if let Ok(mut slot) = FLOAT_POSITION.lock() {
+                *slot = Some((pos.x, pos.y));
+            }
+        }
+    }
+}
+
 /// 浮窗始终接收鼠标事件（ignore=false）。
 /// 锁定穿透由前端用透明像素 + pointer-events 实现：
 /// Tauri 没有 Electron 的 setIgnoreMouseEvents({ forward: true })，
@@ -397,6 +419,13 @@ pub fn show_float_window(
     if let Some(float) = app.get_webview_window("float") {
         let _ = float.set_always_on_top(true);
         let _ = float.set_shadow(false);
+        // 刚建出来的窗口贴回销毁前记下的位置，否则会回到默认位置——轻量模式来回一趟
+        // 歌词条就跑了。没有记录（本次启动第一次开）就保持默认。
+        if just_created {
+            if let Some((x, y)) = FLOAT_POSITION.lock().ok().and_then(|slot| *slot) {
+                let _ = float.set_position(tauri::PhysicalPosition::new(x, y));
+            }
+        }
         float.show().map_err(|e| e.to_string())?;
         apply_float_ignore_from_settings(&app, &settings_state);
         // 只有复用已经存在的窗口时才重新导航——dev server 重启过的话它可能还停在

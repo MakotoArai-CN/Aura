@@ -202,6 +202,9 @@ fn enter_impl(app: tauri::AppHandle, snapshot: MiniSnapshot) -> Result<(), Strin
     // 进程一个都不会退，轻量模式的内存优势就全没了。回完整模式之后 App.svelte 的
     // onMount 会按 enableLyricFloatingWindow 重新把它建出来。
     if let Some(float) = app.get_webview_window("float") {
+        // 位置只活在窗口自身（拖动是直接 set_position 的，settings 里没有 x/y），
+        // 销毁前先记下来，重建时贴回去，不然回完整模式歌词条就跑回默认位置了。
+        crate::window::remember_float_position(&app);
         let _ = float.destroy();
     }
     Ok(())
