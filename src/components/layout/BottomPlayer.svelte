@@ -1032,11 +1032,10 @@
   }
 
   /* 没有硬件合成时，动画期间摘掉所有常驻模糊。这个类只由 degradeWhileResizing 挂上。
-     注意：展开态那层底/顶边线已经挪到 .footerwrap::before 上（透明度与 backdrops
-     一起淡入），不再直接命中 .footerwrap 本体，所以这里不需要再点 .footerwrap。
+     两条都要点：`.footer-main` 自己的常驻模糊，和展开态那层底（`::after`）的。
      有 GPU 时这个类根本不会挂上。 */
   .footer-main.resizing,
-  .footer-main.resizing .footerwrap::before {
+  .footer-main.resizing::after {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
@@ -1187,17 +1186,26 @@
   }
 
   .footerwrap {
-    /* 宽度取视口，不跟父级走 —— 和 `.songdetail-wrapper` 同一个道理。
+    /* 宽度不跟父级走 —— 和 `.songdetail-wrapper` 同一个道理。
        `.footer` 展开时宽度 98vw → 100vw，这一行要是 `width: 100%` 就得每帧跟着重排；
        而 `.cover-list` 里那三个按钮（上一曲/播放/下一曲）是绝对定位在容器中心附近的，
        容器每重排一次它们就挪一次 —— 那正是"按钮位移掉帧"。
 
-       两个状态怎么严丝合缝：收起态父级是 98vw、左边缘在 1vw，所以 `left: 0` +
-       `width: 98vw` 正好贴合；展开态父级长到 100vw，这一行仍是 98vw，靠
-       `translateX(1vw)` 居中。transform 只走合成，不触发布局。
-       而且两者共用同一时长与曲线：父级左边缘 1vw→0 与这一行 0→1vw 逐帧互相抵消，
-       行内容的绝对位置全程恒定 —— 展开过程中这一行是真的一动不动。 */
-    width: 98vw;
+       盒子按**收起态**的内容区算死：`.footer` 收起是 98vw、外边距 1vw，而
+       `.footer-main` 有 1px 边框且 box-sizing: border-box，所以它的 padding box
+       宽度是 98vw - 2px（这 2px 一开始漏算了，导致收起态整行右溢出 2px、
+       相对面板不居中）。`left: 0` 贴 padding box 左边缘。
+
+       展开态父级 padding box 左边缘从 1vw+1px 挪到 1px，这一行用 translateX(1vw)
+       反向补回：两者共用同一时长与同一条曲线，逐帧互相抵消 —— 这一行的**横向**
+       屏幕位置在整段动画里恒定不变（实测 101 帧抖动 0.02px，纯亚像素舍入）。
+       纵向没有补：`margin: 1vh 1vw → 0` 的纵向分量会让整行随面板贴到屏幕底边、
+       单调下移 1vh。那是面板真的走到了屏幕边缘，不是抖动，不需要抵消。
+
+       注意这个盒子固定之后就**不再贴合展开态的面板边缘**（展开态面板宽 100vw，
+       这一行仍是 98vw-2px）。所以展开态那层不透明底不能挂在这一行上，见
+       `.footer-main::after`。 */
+    width: calc(98vw - 2px);
     left: 0;
     display: flex;
     height: 100px;
@@ -1208,24 +1216,33 @@
     transition: transform var(--player-expand-dur) var(--player-expand-ease);
   }
 
-  /* 展开态那层不透明底和顶边分隔线挂在伪元素上，用透明度淡入。
-     原来是直接在 `.footer.expanded .footerwrap` 上换 `background` / `border-top`：
-     类一挂上，底就"啪"一下换成不透明横条，然后面板才慢慢长开 560ms，读起来是两段。
-     多层 gradient 之间没法插值，opacity 可以。
-     `z-index: -1` 让它沉到同级内容下面 —— 伪元素是定位元素，不压下去会盖住左侧
-     歌曲信息和右侧那排按钮。 */
-  .footerwrap::before {
+  /* 展开态播放条那层不透明底 + 顶边分隔线。
+     挂在 `.footer-main` 而不是 `.footerwrap` 上，因为这两件事的几何要求正好相反：
+     - `.footerwrap` 必须**不跟父级尺寸走**，否则行内容每帧重排（见上面注释）；
+     - 这层底必须**铺满父级**，展开态面板是 100vw，少一点就露出面板底色。
+     挂在同一个元素上只能二选一：之前挂在 `.footerwrap::before` 上，结果展开态
+     左右各露 1vw 的白边（实测左 13.8px / 右 11.81px @1280），顶边分隔线两端也短了
+     同样一截，看起来像播放条从面板边缘往里缩了一道。分到两个元素上就都能满足。
+
+     `inset: auto 0 0 0` + 固定高度：贴父级底边、横向撑满父级 padding box。父级高度
+     在动画里从 100px 长到 100vh，这一层始终贴着底边那 100px，高度不参与插值。
+     用 opacity 淡入而不是直接换 background：原来是类一挂上底就"啪"一下变不透明
+     横条、然后面板才慢慢长 560ms，读起来是两段。多层 gradient 之间没法插值，
+     opacity 可以。
+     `z-index: 1` 夹在父级背景（0）和 `.footerwrap`（2）之间。 */
+  .footer-main::after {
     content: "";
     position: absolute;
-    inset: 0;
-    z-index: -1;
+    inset: auto 0 0 0;
+    height: 100px;
+    z-index: 1;
     pointer-events: none;
-    border-radius: inherit;
+    border-radius: 0 0 10px 10px;
     opacity: 0;
     background:
       linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.10) 22%, rgba(0, 0, 0, 0.16)),
       var(--nav-background-color);
-    /* 顶边线用 inset 阴影而不是 border：border 会把伪元素的盒子撑大 1px。 */
+    /* 顶边线用 inset 阴影而不是 border：border 会把盒子撑大 1px。 */
     box-shadow: inset 0 1px 0 var(--line-default-color);
     transition: opacity var(--player-expand-dur) var(--player-expand-ease);
   }
@@ -1240,21 +1257,21 @@
     animation: player-meta-prev 220ms cubic-bezier(0.2, 0.72, 0.18, 1) both;
   }
 
-  /* 展开态：父级左边缘从 1vw 移到 0，这一行反向补 1vw，两者同时长同曲线 ——
-     逐帧相互抵消，播放条内容在整段动画里的屏幕位置恒定不变。 */
+  /* 展开态：父级 padding box 左边缘从 1vw+1px 挪到 1px，这一行反向补 1vw，
+     两者同时长同曲线 —— 逐帧相互抵消，播放条内容的横向屏幕位置恒定不变。 */
   .footer.expanded .footerwrap {
     transform: translateX(1vw);
   }
 
   /* 底和顶边线随展开淡入，而不是类一挂上就硬切。模糊也挂在这一层，跟着透明度一起来，
      避免 backdrop-filter 从 none 到有值的那一下突变。 */
-  .footer.expanded .footerwrap::before {
+  .footer.expanded .footer-main::after {
     opacity: 1;
     -webkit-backdrop-filter: var(--visual-backdrop);
     backdrop-filter: var(--visual-backdrop);
   }
 
-  .footer.expanded.adaptive .footerwrap::before {
+  .footer.expanded.adaptive .footer-main::after {
     background:
       linear-gradient(180deg, rgba(var(--cover-accent-rgb), 0.03), rgba(var(--cover-accent-rgb), 0.14)),
       var(--nav-background-color);
@@ -1279,11 +1296,24 @@
 
   .left-control.slidedown {
     /* 盒子留在原处，不再收 flex-basis：布局全程不变，兄弟节点就不会被推着走。
-       淡出 + 朝左让一点位，两者都只走合成。看不见了所以也不该再吃点击。 */
+       淡出 + 朝左让一点位，两者都只走合成。
+       `visibility: hidden` 延迟一整个动画时长才生效：光靠 opacity: 0 元素仍在
+       tab 序里，Tab 会停在一个屏幕上完全看不见的播放队列按钮上（父级 opacity
+       不参与继承，那个 span 自己的 computed opacity 还是 1）。visibility 能把
+       整棵子树移出 tab 序，但不能提前——否则淡出动画会被直接掐断。
+       `pointer-events: none` 仍要留着：visibility 生效前的那 560ms 也不该能点。 */
     opacity: 0;
     transform: translateX(-24px);
     pointer-events: none;
+    visibility: hidden;
+    transition:
+      opacity var(--player-expand-dur) var(--player-expand-ease),
+      transform var(--player-expand-dur) var(--player-expand-ease),
+      visibility 0s linear var(--player-expand-dur);
   }
+
+  /* app.css 的全局 reduced-motion 只压 duration 和 delay，这里那条 delay 会被压到 0，
+     正好是想要的：不减弱动效时延迟隐藏，减弱时立即隐藏。无需额外覆写。 */
 
   .left-control .icon {
     display: flex;
@@ -2356,13 +2386,18 @@
       grid-template-columns: minmax(0, 1fr) 148px 42px;
       align-items: center;
       border-radius: 0 0 12px 12px;
-      /* 窄窗的收起态外边距是 `0 8px`（不是 1vw），所以这一行的固定宽度和展开时
-         的反向补偿都要跟着换成 8px，否则两个状态对不齐。 */
-      width: calc(100vw - 16px);
+      /* 窄窗收起态外边距是 `0 8px`（不是 1vw），减去父级 1px 边框的两边共 2px。 */
+      width: calc(100vw - 18px);
     }
 
     .footer.expanded .footerwrap {
       transform: translateX(8px);
+    }
+
+    /* 展开态那层底跟着窄窗的高度和圆角走。 */
+    .footer-main::after {
+      height: 88px;
+      border-radius: 0 0 12px 12px;
     }
 
     .left-control {

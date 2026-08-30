@@ -467,7 +467,8 @@
     justify-content: center;
     border-radius: 50%;
     -webkit-app-region: no-drag;
-    transition: 0.2s;
+    /* hover 只改 background-color。 */
+    transition: background-color 0.2s ease;
     z-index: 100;
   }
 
@@ -492,7 +493,12 @@
     margin-right: 32px;
     margin-top: 24px;
     align-items: center;
-    transition: all 0.5s;
+    /* 原来是 `all 0.5s`。这块没有任何"状态类"会改它——真正会改它的是两个 media
+       query：max-height:720px 改 align-items / margin-top，max-width:720px 改
+       flex / justify-content / margin / width。于是窗口跨过断点那一刻，margin 和
+       flex-basis 被拉成 500ms 逐帧插值，而这块里面挂着 220~340px 的大封面加
+       `.covershadow`（filter: var(--visual-cover-shadow-filter)）——每帧重排一次
+       就重做一次那层投影模糊。断点切换本该是一帧到位的事。去掉。 */
     z-index: 1;
   }
 
