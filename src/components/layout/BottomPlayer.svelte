@@ -1031,11 +1031,12 @@
     background-color: transparent;
   }
 
-  /* 没有硬件合成时，动画期间摘掉所有常驻模糊（含展开态那层 footerwrap 的）。
-     理由见 script 里 degradeWhileResizing 的注释。有 GPU 时这个类根本不会挂上。
-     !important 是因为 .footer.expanded .footerwrap 跟这条同特异性但写在后面。 */
+  /* 没有硬件合成时，动画期间摘掉所有常驻模糊。这个类只由 degradeWhileResizing 挂上。
+     注意：展开态那层底/顶边线已经挪到 .footerwrap::before 上（透明度与 backdrops
+     一起淡入），不再直接命中 .footerwrap 本体，所以这里不需要再点 .footerwrap。
+     有 GPU 时这个类根本不会挂上。 */
   .footer-main.resizing,
-  .footer-main.resizing .footerwrap {
+  .footer-main.resizing .footerwrap::before {
     -webkit-backdrop-filter: none !important;
     backdrop-filter: none !important;
   }
@@ -1186,13 +1187,47 @@
   }
 
   .footerwrap {
-    width: 100%;
+    /* 宽度取视口，不跟父级走 —— 和 `.songdetail-wrapper` 同一个道理。
+       `.footer` 展开时宽度 98vw → 100vw，这一行要是 `width: 100%` 就得每帧跟着重排；
+       而 `.cover-list` 里那三个按钮（上一曲/播放/下一曲）是绝对定位在容器中心附近的，
+       容器每重排一次它们就挪一次 —— 那正是"按钮位移掉帧"。
+
+       两个状态怎么严丝合缝：收起态父级是 98vw、左边缘在 1vw，所以 `left: 0` +
+       `width: 98vw` 正好贴合；展开态父级长到 100vw，这一行仍是 98vw，靠
+       `translateX(1vw)` 居中。transform 只走合成，不触发布局。
+       而且两者共用同一时长与曲线：父级左边缘 1vw→0 与这一行 0→1vw 逐帧互相抵消，
+       行内容的绝对位置全程恒定 —— 展开过程中这一行是真的一动不动。 */
+    width: 98vw;
+    left: 0;
     display: flex;
     height: 100px;
     position: absolute;
     bottom: 0;
     z-index: 2;
     border-radius: 0 0 10px 10px;
+    transition: transform var(--player-expand-dur) var(--player-expand-ease);
+  }
+
+  /* 展开态那层不透明底和顶边分隔线挂在伪元素上，用透明度淡入。
+     原来是直接在 `.footer.expanded .footerwrap` 上换 `background` / `border-top`：
+     类一挂上，底就"啪"一下换成不透明横条，然后面板才慢慢长开 560ms，读起来是两段。
+     多层 gradient 之间没法插值，opacity 可以。
+     `z-index: -1` 让它沉到同级内容下面 —— 伪元素是定位元素，不压下去会盖住左侧
+     歌曲信息和右侧那排按钮。 */
+  .footerwrap::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    border-radius: inherit;
+    opacity: 0;
+    background:
+      linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.10) 22%, rgba(0, 0, 0, 0.16)),
+      var(--nav-background-color);
+    /* 顶边线用 inset 阴影而不是 border：border 会把伪元素的盒子撑大 1px。 */
+    box-shadow: inset 0 1px 0 var(--line-default-color);
+    transition: opacity var(--player-expand-dur) var(--player-expand-ease);
   }
 
   .footerwrap.switch-next .left-control .detail,
@@ -1205,20 +1240,25 @@
     animation: player-meta-prev 220ms cubic-bezier(0.2, 0.72, 0.18, 1) both;
   }
 
+  /* 展开态：父级左边缘从 1vw 移到 0，这一行反向补 1vw，两者同时长同曲线 ——
+     逐帧相互抵消，播放条内容在整段动画里的屏幕位置恒定不变。 */
   .footer.expanded .footerwrap {
-    background:
-      linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.10) 22%, rgba(0, 0, 0, 0.16)),
-      var(--nav-background-color);
-    border-top: 1px solid var(--line-default-color);
+    transform: translateX(1vw);
+  }
+
+  /* 底和顶边线随展开淡入，而不是类一挂上就硬切。模糊也挂在这一层，跟着透明度一起来，
+     避免 backdrop-filter 从 none 到有值的那一下突变。 */
+  .footer.expanded .footerwrap::before {
+    opacity: 1;
     -webkit-backdrop-filter: var(--visual-backdrop);
     backdrop-filter: var(--visual-backdrop);
   }
 
-  .footer.expanded.adaptive .footerwrap {
+  .footer.expanded.adaptive .footerwrap::before {
     background:
       linear-gradient(180deg, rgba(var(--cover-accent-rgb), 0.03), rgba(var(--cover-accent-rgb), 0.14)),
       var(--nav-background-color);
-    border-top-color: rgba(var(--cover-accent-rgb), 0.24);
+    box-shadow: inset 0 1px 0 rgba(var(--cover-accent-rgb), 0.24);
   }
 
   .left-control {
@@ -1226,14 +1266,23 @@
     display: flex;
     align-items: center;
     overflow: hidden;
-    transition: 0.5s;
+    /* 只过渡合成属性。原来是 `0.5s` 简写（= all），而收起态那条规则改的是
+       `flex: 0 0 0` —— flex-basis 是布局属性，36% 逐帧收到 0，兄弟节点
+       `.main-info` 每帧重新分到一个新宽度，里面三个绝对定位的传输按钮
+       （上一曲/播放/下一曲）就跟着挪一次。那才是"按钮位移掉帧"的主因，
+       而且时长 0.5s 和展开动画的 560ms 还不是同一条曲线，两个运动互相打架。 */
+    transition:
+      opacity var(--player-expand-dur) var(--player-expand-ease),
+      transform var(--player-expand-dur) var(--player-expand-ease);
     opacity: 1;
   }
 
   .left-control.slidedown {
-    flex: 0 0 0;
+    /* 盒子留在原处，不再收 flex-basis：布局全程不变，兄弟节点就不会被推着走。
+       淡出 + 朝左让一点位，两者都只走合成。看不见了所以也不该再吃点击。 */
     opacity: 0;
-    transform: scaleX(0);
+    transform: translateX(-24px);
+    pointer-events: none;
   }
 
   .left-control .icon {
@@ -1242,7 +1291,10 @@
     border-radius: 10px;
     padding: 7px;
     margin: 37px;
-    transition: all 0.3s;
+    /* 只有 background-color / color 会变（hover 与 playlistactive 两态）。
+       原来的 `all 0.3s` 会把 margin: 37px 这类布局值也纳入——它现在不变，但
+       窄窗 media query 里就是 `0 10px 0 12px`，窗口跨过 720px 那一刻会被插值。 */
+    transition: background-color 0.3s ease, color 0.3s ease;
     background: transparent;
     cursor: pointer;
     color: var(--player-icon-color);
@@ -1368,7 +1420,10 @@
   .cover .cover-list span {
     bottom: 0;
     cursor: pointer;
-    transition: 0.3s;
+    /* 原来 `0.3s` 简写 = all。这个元素只会在 hover / 展开态改 opacity ——
+       但它是绝对定位在 .cover 中心附近的，任何来自容器重排的位移都是副作用，
+       all 不会让位移更顺，只会把 padding/margin 之类的突变也拉成逐帧插值。 */
+    transition: opacity 0.3s ease;
     color: var(--white--black);
     display: flex;
     justify-content: center;
@@ -1389,7 +1444,6 @@
     background-color: var(--white--black-background);
     outline: 1px solid var(--theme-color);
   }
-
   .cover:hover .cover-list span:not(.cover-image) {
     opacity: 1;
   }
@@ -1713,6 +1767,8 @@
     background: var(--footer-player-bar-cur-button-color);
     height: 8px;
     width: 2px;
+    /* hover 态会改成 10×10，宽高是布局属性 —— 但那发生在指针悬停时、没有并发的
+       flex 重排，一次重排没有观感问题。这里 `all 0.3s` 只在悬停时生效，保留即可。 */
     transition: 0.3s;
   }
 
@@ -1755,15 +1811,17 @@
   }
 
   .right-control {
+    /* 两个状态共用同一个 flex-basis。原来展开态收到 28%，而 flex-basis 是布局属性：
+       36%→28% 逐帧插值，等于每帧重新分配这一行的剩余宽度，中间的 `.main-info`
+       跟着变宽，里面三个绝对定位的传输按钮（上一曲/播放/下一曲）每帧挪一次
+       —— 那正是"按钮位移掉帧"。
+       这一排在展开态是要留着用的（收起按钮、桌面歌词、译文切换都在这里），
+       所以不能靠淡出躲开，只能让几何从头到尾不动。 */
     flex: 0 0 36%;
     display: flex;
     align-items: center;
     justify-content: flex-end;
     min-width: 0;
-  }
-
-  .footer.expanded .right-control {
-    flex: 0 0 28%;
   }
 
   .right-control .ctrl {
@@ -1776,7 +1834,10 @@
     margin-right: 32px;
     padding: 7px;
     display: flex;
-    transition: 0.3s;
+    /* 只过渡 paint 属性。原来的 `0.3s` all 会把 margin-right 也纳入（819 行那条悬停
+       态就是靠它张开的）——那会是布局插值，这里平时不变所以没事，但显式列清
+       以后加状态就不会悄悄引入重排。 */
+    transition: background-color 0.3s ease, color 0.3s ease;
     border-radius: 10px;
     color: var(--player-right-icon-color);
   }
@@ -1807,7 +1868,8 @@
     height: 35px;
     box-sizing: border-box;
     width: 30px;
-    transition: 0.3s;
+    /* 只有 background-color / color 会变。 */
+    transition: background-color 0.3s ease, color 0.3s ease;
     overflow: hidden;
     color: var(--player-right-icon-color);
     background: transparent;
@@ -1838,7 +1900,9 @@
     margin-right: 32px;
     padding: 7px;
     display: flex;
-    transition: 0.3s;
+    /* hover / slidedown 两态只改 background-color 和 transform（旋转 180°），
+       前者走 paint、后者走合成。 */
+    transition: background-color 0.3s ease, transform 0.3s ease;
     border-radius: 50%;
     color: var(--player-right-icon-color);
     cursor: pointer;
@@ -1866,7 +1930,8 @@
     padding: 7px;
     display: flex;
     cursor: pointer;
-    transition: 0.3s;
+    /* selected / hover 只改 background-color 与 color。 */
+    transition: background-color 0.3s ease, color 0.3s ease;
     border-radius: 10px;
     color: var(--player-right-icon-color);
   }
@@ -1901,7 +1966,8 @@
 
   .menu-modal {
     border-radius: 10px;
-    transition: 0.3s;
+    /* 遮罩的出入场由 `transition:fade` 负责（见模板）——元素挂载时 `slideup` 已经在
+       class 上了，CSS 过渡从来没有起点，这条是死的。去掉。 */
     left: 0;
     right: 0;
     top: 0;
@@ -1913,21 +1979,23 @@
   .menu-modal.slideup {
     bottom: 0;
     opacity: 1;
-    transition: 0.3s;
   }
 
   .menu {
     border-radius: 12px;
     position: absolute;
     z-index: 120;
-    bottom: 120px;
-    height: 0;
-    opacity: 0;
+    /* 队列面板的出入场由模板上的 `transition:fly` 负责，挂载时 `slideup` 已经在
+       class 上，所以这里的 `all 0.3s` 从来没有起点，一帧都没跑过——但它会在
+       视觉档位切换时把 backdrop-filter 卷进 300ms 的逐帧模糊。去掉，两态并成一套。
+       height 也一并写死：原来 0 → 500px 由 slideup 提供，靠的就是那条死过渡，
+       实际是一帧跳完的。 */
+    bottom: 125px;
+    height: 500px;
     box-sizing: border-box;
     border: 1px solid var(--line-default-color);
     left: 0;
     -webkit-app-region: no-drag;
-    transition: all 0.3s;
     overflow: hidden;
     width: 530px;
     -webkit-backdrop-filter: var(--visual-backdrop);
@@ -1939,13 +2007,8 @@
     padding-bottom: 14px;
   }
 
-  .menu.slideup {
-    bottom: 125px;
-    height: 500px;
-    opacity: 1;
-    box-sizing: border-box;
-    border: 1px solid var(--line-default-color);
-  }
+  /* `.slideup` 的几何已经并进 `.menu` 本体（那条过渡是死的，见上面注释），
+     这里只留窄窗 media query 仍会覆写的那部分。 */
 
   .menu .menu-header {
     height: 58px;
@@ -2259,9 +2322,8 @@
       min-width: 0;
     }
 
-    .footer.expanded .right-control {
-      flex: 1 1 24%;
-    }
+    /* 同上：展开态不再改 flex-basis，两态共用一套。原来 30%→24% 会让中间列
+       每帧重新分宽，三个传输按钮跟着挪。 */
 
     .right-control .ctrl a,
     .right-control .lyric-toggle,
@@ -2294,6 +2356,13 @@
       grid-template-columns: minmax(0, 1fr) 148px 42px;
       align-items: center;
       border-radius: 0 0 12px 12px;
+      /* 窄窗的收起态外边距是 `0 8px`（不是 1vw），所以这一行的固定宽度和展开时
+         的反向补偿都要跟着换成 8px，否则两个状态对不齐。 */
+      width: calc(100vw - 16px);
+    }
+
+    .footer.expanded .footerwrap {
+      transform: translateX(8px);
     }
 
     .left-control {
@@ -2301,9 +2370,9 @@
       overflow: hidden;
     }
 
-    .left-control.slidedown {
-      display: none;
-    }
+    /* 窄窗下也别 `display: none`：一移出网格流，`.main-info` 就从第 2 列跳到第 1 列，
+       中间那 148px 的封面/按钮区整块横移一次。沿用基础规则的淡出 + 位移即可，
+       网格三列始终在位。 */
 
     .left-control .icon {
       margin: 0 10px 0 12px;
@@ -2408,20 +2477,16 @@
       padding: 8px;
     }
 
-    .footer.expanded .footerwrap {
-      grid-template-columns: 1fr 148px 42px;
-    }
+    /* 窄窗展开态不再改网格列宽：原来的 `1fr` 收起时是 `minmax(0,1fr)`，grid 每帧
+       重新解列宽 → 中间列跟着挪。两态共用一套定义。 */
 
     .menu {
       left: 8px;
       right: 8px;
-      bottom: calc(104px + var(--safe-bottom));
+      /* 收起 125px → 展开 108px 由 fly 过渡负责，这里窄窗两态并成一套定义。 */
+      bottom: calc(108px + var(--safe-bottom));
       width: auto;
       max-width: none;
-    }
-
-    .menu.slideup {
-      bottom: calc(108px + var(--safe-bottom));
       height: min(460px, calc(100dvh - 180px - var(--safe-bottom)));
     }
 
