@@ -1,6 +1,6 @@
 [package]
 name = "aura"
-version = "1.0.2"
+version = "1.0.3"
 description = "One for all free music"
 authors = ["MakotoArai"]
 license = "MIT"
