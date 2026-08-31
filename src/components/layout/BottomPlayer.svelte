@@ -30,6 +30,7 @@
   let hasPlayerContent = $derived(Boolean($playerState.currentTrack) || $playerState.playlist.length > 0);
   let isDragging = $state(false);
   let dragPercent = $state(0);
+  let isVolumeDragging = $state(false);
   let showQueue = $state(false);
   let showAddMenu = $state(false);
   let addMenuCreateMode = $state(false);
@@ -250,24 +251,36 @@
     if ($playerState.muted) player.unmute();
   }
 
-  function handleProgressDown(e: MouseEvent) {
+  /* 拖动一律走 Pointer Events + setPointerCapture，不再用 mousedown + window mousemove。
+     两个原因：
+     1) 安卓上旧写法根本不工作。WebView 只会为「点击」补一组合成的 mouse 事件，手指移动期间
+        发的是 touchmove，不会合成 mousemove —— 所以旧写法在手机上只能点，拖不动。
+     2) 指针捕获之后 move/up 直接派发到该元素，不用往 window 上挂全局监听再摘，
+        指针离开元素甚至离开窗口也不会丢事件，捕获在 up/cancel 时自动释放。
+     配套还需要 CSS 的 touch-action: none（见 .playbar-clickable / .m-pbar）：
+     否则浏览器会把这一下判成滚动手势，直接把指针流 cancel 掉。 */
+  function handleProgressDown(e: PointerEvent) {
     const target = e.currentTarget as HTMLElement;
-    const pct = seekFromElement(target, e.clientX);
+    target.setPointerCapture(e.pointerId);
     isDragging = true;
-    dragPercent = pct;
+    dragPercent = seekFromElement(target, e.clientX);
     e.preventDefault();
+  }
 
-    const onMove = (event: MouseEvent) => {
-      dragPercent = seekFromElement(target, event.clientX);
-    };
-    const onUp = () => {
-      player.seek(dragPercent);
-      isDragging = false;
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+  function handleProgressMove(e: PointerEvent) {
+    if (!isDragging) return;
+    dragPercent = seekFromElement(e.currentTarget as HTMLElement, e.clientX);
+  }
+
+  function handleProgressUp() {
+    if (!isDragging) return;
+    isDragging = false;
+    player.seek(dragPercent);
+  }
+
+  /** 系统抢走手势（来电、通知栏下拉、返回手势）时收到 pointercancel：不 seek，原地放弃。 */
+  function handleProgressCancel() {
+    isDragging = false;
   }
 
   function handleProgressKeydown(e: KeyboardEvent) {
@@ -282,20 +295,24 @@
     player.seek(next);
   }
 
-  function handleVolumeDown(e: MouseEvent) {
+  function handleVolumeDown(e: PointerEvent) {
     const target = e.currentTarget as HTMLElement;
-    const update = (event: MouseEvent) => setVolumePercent(seekFromElement(target, event.clientX));
+    target.setPointerCapture(e.pointerId);
+    isVolumeDragging = true;
     e.preventDefault();
-    update(e);
+    setVolumePercent(seekFromElement(target, e.clientX));
+  }
 
-    const onMove = (event: MouseEvent) => update(event);
-    const onUp = () => {
-      player.commitVolume();
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
+  function handleVolumeMove(e: PointerEvent) {
+    if (!isVolumeDragging) return;
+    setVolumePercent(seekFromElement(e.currentTarget as HTMLElement, e.clientX));
+  }
+
+  /** 抬手才落盘。commitVolume 是持久化那一步，拖动途中每帧都写等于每帧一次磁盘 IO。 */
+  function handleVolumeUp() {
+    if (!isVolumeDragging) return;
+    isVolumeDragging = false;
+    player.commitVolume();
   }
 
   function handleVolumeWheel(e: WheelEvent) {
@@ -533,6 +550,7 @@
 <div
   class="footer"
   class:footerdef={!hasPlayerContent}
+  class:dragging={isDragging}
   class:expanded={isNowPlaying}
   class:adaptive={$settings.enableCoverAdaptiveTheme && adaptiveAccent}
   style={coverAccentStyle}
@@ -712,7 +730,10 @@
               </span>
               <div
                 class="playbar-clickable"
-                onmousedown={handleProgressDown}
+                onpointerdown={handleProgressDown}
+                onpointermove={handleProgressMove}
+                onpointerup={handleProgressUp}
+                onpointercancel={handleProgressCancel}
                 onkeydown={handleProgressKeydown}
                 role="slider"
                 tabindex="0"
@@ -744,7 +765,10 @@
               </span>
               <div
                 class="m-pbar volume"
-                onmousedown={handleVolumeDown}
+                onpointerdown={handleVolumeDown}
+                onpointermove={handleVolumeMove}
+                onpointerup={handleVolumeUp}
+                onpointercancel={handleVolumeUp}
                 onkeydown={handleVolumeKeydown}
                 role="slider"
                 tabindex="0"
@@ -1646,7 +1670,14 @@
     top: -50px;
     z-index: -1;
     overflow: hidden;
+    /* 播放期间这 0.1s 是有用的：进度每 250ms 才更新一次，靠它把台阶抹成连续转动。 */
     transition: transform 0.1s linear;
+  }
+
+  /* 拖动时反过来：光标已经在新位置，这一圈还在补 100ms 的插值，就成了"跟不上手"。
+     填充（clip-path）和滑块（left）现在都是瞬时的，这里也必须瞬时，三者才同步。 */
+  .footer.dragging .circlemark .circle {
+    transition: none;
   }
 
   .circlemark .topmark {
@@ -1763,6 +1794,10 @@
     padding: 5px 0;
     flex: 1;
     cursor: pointer;
+    /* 触摸端必需：不声明的话浏览器会先观察这一下是不是滚动/缩放手势，判定期间
+       既不发 pointermove，判定成滚动后还会直接 pointercancel —— 手机上就是
+       「按住能点，一拖就丢」。声明 none 表示这块的手势全部由脚本处理。 */
+    touch-action: none;
   }
 
   .barbg {
@@ -1797,9 +1832,20 @@
     background: var(--footer-player-bar-cur-button-color);
     height: 8px;
     width: 2px;
-    /* hover 态会改成 10×10，宽高是布局属性 —— 但那发生在指针悬停时、没有并发的
-       flex 重排，一次重排没有观感问题。这里 `all 0.3s` 只在悬停时生效，保留即可。 */
-    transition: 0.3s;
+    /* 只列 hover 态真正会变的那几个属性。原来是 `0.3s` 简写（= all），而
+       `left` 是每 tick、拖动时每帧都在改的内联样式 —— 被 all 收进去之后：
+       1) 拖动时每次 mousemove 都重启一条 300ms 的 left 过渡，滑块永远追不上光标，
+          而同一个值驱动的填充（clip-path，无过渡）是瞬时的 —— 两者当场脱节，
+          这就是拖进度条"不跟手"的来源；
+       2) left 是布局属性，等于每帧把整条 playbar 重排一遍。
+       上一条注释说"all 只在悬停时生效"是看错了：基础规则对所有属性变化都生效，
+       包括每 tick 写进来的内联 left。 */
+    transition:
+      width 0.3s,
+      height 0.3s,
+      border-radius 0.3s,
+      top 0.3s,
+      background-color 0.3s;
   }
 
   .playbar .playbar-clickable:hover .barbg .btn,
@@ -1838,6 +1884,7 @@
     padding: 5px 0;
     cursor: pointer;
     position: relative;
+    touch-action: none;
   }
 
   .right-control {
