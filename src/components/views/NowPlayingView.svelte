@@ -202,6 +202,8 @@
   let rawBgUrl = $derived($playerState.currentTrack?.img_url ?? "");
   let bgUrl = $derived(sizedImageUrl(rawBgUrl, 500));
   let bgBlurUrl = $derived(sizedImageUrl(rawBgUrl, 200));
+  /** 背景交叉淡入的底层：顶层淡完之后才落定到这里，所以这次换歌的"上一张"始终在底下垫着。 */
+  let bgCommittedBlurUrl = $state("");
 
   function nextVariantMode(): LyricVariantMode {
     return getNextLyricVariantMode(variantMode, lyricAvailability);
@@ -245,8 +247,19 @@
   <div class="draggable-zone"></div>
 
   {#if bgUrl && $settings.enableNowplayingCoverBackground && $deviceTier !== "low"}
+    <!-- 两层叠放做真正的交叉淡入：底层是上一张（已落定），顶层按 URL 取 key，
+         换歌时重建、从 opacity 0 淡上来，盖住底层之后再把 URL 落定到底层。
+         原来是单层 + `transition: background 1.5s` —— background-image 是离散属性，
+         不可插值，浏览器会在时长的 50% 处直接换图：等于「静止 750ms，然后硬切」。 -->
     <div class="bgwrapper">
-      <div class="bg" style:background-image={cssUrl(bgBlurUrl)}></div>
+      <div class="bg" style:background-image={cssUrl(bgCommittedBlurUrl)}></div>
+      {#key bgBlurUrl}
+        <div
+          class="bg bg-incoming"
+          style:background-image={cssUrl(bgBlurUrl)}
+          onanimationend={() => (bgCommittedBlurUrl = bgBlurUrl)}
+        ></div>
+      {/key}
     </div>
   {/if}
 
@@ -441,18 +454,31 @@
     width: 100%;
     position: absolute;
     inset: 0;
+    /* 0.6 和模糊都从单层挪到这里：
+       - opacity 在容器上，交叉淡入期间两层的合成结果始终是满不透明，再乘 0.6，
+         整体亮度全程恒定；留在层上的话两层各 0.6 叠起来会亮到约 0.84，换歌时闪一下。
+       - filter 在容器上，那一段只需要对合成结果模糊一次，而不是两层各模糊一遍。
+         视觉档位变量：high=72px 完整模糊；mid=48px 轻量；low=无（不渲染该层）。 */
+    opacity: 0.6;
+    filter: var(--visual-cover-bg-filter);
   }
 
   .bg {
-    opacity: 0.6;
     width: 100%; height: 100%;
-    /* 视觉档位变量：high=72px 完整模糊；mid=48px 轻量；low=无（不渲染该层） */
-    filter: var(--visual-cover-bg-filter);
     background-repeat: no-repeat;
     background-position: center;
     background-size: cover;
-    transition: background ease-in-out 1.5s;
     position: absolute;
+    inset: 0;
+  }
+
+  .bg-incoming {
+    animation: bg-fade-in 700ms ease-in-out both;
+  }
+
+  @keyframes bg-fade-in {
+    from { opacity: 0; }
+    to   { opacity: 1; }
   }
 
   .close {
@@ -819,7 +845,18 @@
 
   @media (max-width: 720px) {
     .songdetail-wrapper {
+      /* 窄窗下这三件都得跟着播放条的窄窗尺寸走，否则这块帘的盒子和父级
+         `.footer-main.slidedown` 对不上，底部会差出一截：
+         1) 控制条实高是 88px（见 BottomPlayer 的同宽度断点），不是基础值的 100px；
+         2) 父级窄窗高度是 `100dvh - safe-top - safe-bottom - 16px`，所以这里的参照
+            必须是同一个表达式，只是再减去控制条；
+         3) dvh 前面留一条 vh 兜底 —— 安卓 WebView 里 100vh 取的是「地址栏收起后」的
+            最大视口，100dvh 才是当前视口，两者在地址栏显隐时能差出几十 px。父级用
+            dvh、子级用 vh 的话，帘的裁剪边和面板顶边就不再是同一条线。 */
+      --nowplaying-control-height: 88px;
       bottom: var(--nowplaying-control-height);
+      height: calc(100vh - var(--safe-top) - var(--safe-bottom) - 16px - var(--nowplaying-control-height));
+      height: calc(100dvh - var(--safe-top) - var(--safe-bottom) - 16px - var(--nowplaying-control-height));
       overflow-y: auto;
     }
 
