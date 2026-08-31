@@ -344,7 +344,12 @@
     background-color: var(--color-body-bg);
     border-radius: var(--app-shell-radius);
     overflow: hidden;
-    transition: background-color 0.35s ease, background 0.35s ease, color 0.35s ease;
+    /* 只留真正可插值的两个。原来列表里还有 `background` 简写，它展开后包含
+       background-image —— 液态玻璃主题给这里挂的是渐变，其余主题没有，于是切主题时
+       background-image 在 渐变↔none 之间做离散切换：浏览器在 50% 处硬换，
+       观感是「停 175ms，然后啪一下」。渐变本来就不能交叉淡化，摘掉之后渐变瞬间换、
+       底色仍然平滑过渡，比原来那个卡半拍的版本干净。 */
+    transition: background-color 0.35s ease, color 0.35s ease;
   }
 
   .wrap[data-theme="liquid-glass"] .body-bg {
