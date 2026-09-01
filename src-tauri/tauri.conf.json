@@ -23,6 +23,7 @@
         "center": true
       }
     ],
+    "macOSPrivateApi": true,
     "security": {
       "csp": null
     }
@@ -39,7 +40,7 @@
     ],
     "category": "Music",
     "android": {
-      "minSdkVersion": 24
+      "minSdkVersion": 26
     },
     "iOS": {
       "developmentTeam": ""

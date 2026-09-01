@@ -546,7 +546,13 @@ impl Ui {
 
         // wndproc 通过 GWLP_USERDATA 找回这个对象。Box 的地址在移动 Box 时不变，
         // 所以这里存的指针在整个窗口生命周期内都有效。
-        SetWindowLongPtrW(hwnd, GWLP_USERDATA, ui.as_mut() as *mut Ui as isize);
+        //
+        // 这里的 `as _` 不能写成 `as isize`：windows crate 在 64 位上把
+        // SetWindowLongPtrW 的 dwnewlong 定成 isize，32 位上却定成 i32
+        // （32 位没有真正的 *Ptr 版本，宏退化到 SetWindowLongW）。写死 isize
+        // 会让 i686 编不过（E0308），交给推导两边都成立 —— 32 位指针本来就是
+        // 32 位宽，截断不会丢信息。
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, ui.as_mut() as *mut Ui as _);
         ui.apply_scale(scale);
         ui.begin_current(true);
         SetTimer(Some(hwnd), TIMER_ID, TIMER_MS, None);

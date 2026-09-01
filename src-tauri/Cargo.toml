@@ -16,7 +16,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# macos-private-api：main 和 float 两个窗口都开了 transparent，而 macOS 上
+# 透明窗口走的是私有 API，不开这个 feature 连 .transparent() 方法都不存在
+# （E0599）。代价是用了私有 API 的包上不了 Mac App Store，自行分发不受影响。
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-store = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
