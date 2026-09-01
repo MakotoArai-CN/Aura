@@ -9,6 +9,12 @@
 # NDK r27 之后链接器默认就是 16 KB，但 CI 固定用的是 r26b；与其只改 CI，不如把约束写进
 # 仓库，本地 `tauri android build` 也一并受益。32 位 ABI 不受影响（16 KB 页只针对 arm64
 # 与 x86_64），所以不给 armv7/x86 加，免得白涨体积。
+#
+# 这个文件必须放在**仓库根**，不能放 src-tauri/ 下。cargo 找配置是从「当前工作目录」
+# 逐级往上，跟 Cargo.toml 在哪无关；而 `tauri android build` 是由 package.json 的
+# 脚本在仓库根启动的，永远走不到 src-tauri/.cargo/。放错位置的那一版（730cd9f）从
+# 落地起就没生效过：v1.0.3 的 arm64/x86_64 产物实测 p_align 仍是 4096，同一条
+# CI 里的对齐自检把整个 Android job 判红，正是这个原因。
 [target.aarch64-linux-android]
 rustflags = [
   "-C", "link-arg=-Wl,-z,max-page-size=16384",

@@ -490,8 +490,9 @@ jobs:
       # v1.0.2 装得上但一开就退：libaura_lib.so 的 PT_LOAD 段是 4 KB 对齐，而清单里
       # extractNativeLibs=false，.so 由 linker 直接从 APK mmap。16 KB 页的 Android 15/16
       # 设备映射不了 4 KB 粒度的段，dlopen 失败，进程死在加载原生库那一步。
-      # src-tauri/.cargo/config.toml 已经加了链接参数，这一步是防回归的硬闸：对齐不达标
-      # 就让流水线红掉，别再让同样装不了的包发出去。
+      # .cargo/config.toml（仓库根，不是 src-tauri/ 下——cargo 按 cwd 逐级往上找配置，
+      # 而 tauri android build 从仓库根启动）已经加了链接参数，这一步是防回归的硬闸：
+      # 对齐不达标就让流水线红掉，别再让同样装不了的包发出去。
       - name: Verify 16 KB page alignment
         run: |
           python3 - <<'PY'
