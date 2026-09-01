@@ -70,6 +70,17 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
 
+      # tauri 打包时会自己去 GitHub 下 WiX 和 NSIS（不认 PATH 上的 makensis），
+      # 落地在 %LOCALAPPDATA%\tauri\{WixTools314,NSIS}。v1.0.3 的 arm64 就是倒在
+      # 下 nsis-3.11.zip 那一下（os error 10054，对端掐断连接）——编译和 MSI 都已完成。
+      # 缓存这个目录，命中之后整个下载环节不再发生，偶发网络问题就没了触发点。
+      # 键里带 msi：这个 job 打 MSI+NSIS 两种包，工具目录内容和只打 NSIS 的那个 job 不同。
+      - name: Cache Tauri bundler tools
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-bundler-tools-msi-nsis-${{ runner.os }}-v1
+
       - name: Install NSIS
         shell: powershell
         run: |
@@ -87,7 +98,19 @@ jobs:
       - name: Check frontend
         run: bunx svelte-check
 
+      # 缓存冷启动时仍要下一次工具链，那一下失败过。给一次重试：第一次允许失败，
+      # 失败了才跑第二次；两次都挂才判红。编译产物有 rust-cache 垫着，重试很快。
       - name: Build Tauri app
+        id: build_win
+        continue-on-error: true
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --target ${{ matrix.target }}
+
+      - name: Build Tauri app (retry)
+        if: steps.build_win.outcome == 'failure'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -129,6 +152,15 @@ jobs:
         with:
           workspaces: "src-tauri -> target"
 
+      # 与 build-windows 分开的缓存键：那个 job 打 MSI+NSIS，会下 WiX 和 NSIS 两套；
+      # 这个只打 NSIS。共用一个键的话，先跑完的一方会把「只有 NSIS」的目录锁进缓存，
+      # 之后 MSI 那边每次都得重下 WiX（键已存在，缓存不再更新）。
+      - name: Cache Tauri bundler tools
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\tauri
+          key: tauri-bundler-tools-nsis-${{ runner.os }}-v1
+
       - name: Install NSIS
         shell: powershell
         run: |
@@ -151,6 +183,16 @@ jobs:
           $conf | ConvertTo-Json -Depth 20 | Set-Content "src-tauri/tauri.conf.json"
 
       - name: Build Tauri app
+        id: build_wv2
+        continue-on-error: true
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: --bundles nsis
+
+      - name: Build Tauri app (retry)
+        if: steps.build_wv2.outcome == 'failure'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
