@@ -426,11 +426,11 @@ jobs:
               defaultConfig {
                   manifestPlaceholders["usesCleartextTraffic"] = "true"
                   applicationId = "com.makotoarai.aura"
-                  # 必须和 tauri.conf.json 的 bundle.android.minSdkVersion 一致。
-                  # 这份 build.gradle.kts 是整份覆盖写死的，tauri 生成的模板（会读 conf）
-                  # 被它盖掉，所以 conf 里改成 26 之后这里不跟着改，打出来的 APK 清单
-                  # 仍然是 minSdk 24：Android 7 上装得进去，但 libaura_lib.so 链接的是
-                  # API 26 的 AAudio，dlopen 直接失败——装上就闪退。
+                  // 必须和 tauri.conf.json 的 bundle.android.minSdkVersion 一致。
+                  // 这份 build.gradle.kts 是整份覆盖写死的，tauri 生成的模板（会读 conf）
+                  // 被它盖掉，所以 conf 里改成 26 之后这里不跟着改，打出来的 APK 清单
+                  // 仍然是 minSdk 24：Android 7 上装得进去，但 libaura_lib.so 链接的是
+                  // API 26 的 AAudio，dlopen 直接失败——装上就闪退。
                   minSdk = 26
                   targetSdk = 36
                   versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
